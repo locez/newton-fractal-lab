@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { cAbs } from "../src/complex.js";
-import { buildShader } from "../src/gpu-renderer.js";
-import { evaluateExpression, ExpressionError, parseExpression, toWgsl } from "../src/parser.js";
+import { buildDeepShader, buildShader } from "../src/gpu-renderer.js";
+import { evaluateExpression, ExpressionError, parseExpression, toDsWgsl, toWgsl } from "../src/parser.js";
 import { findRoots } from "../src/root-finder.js";
+import { needsPrecisionDetail } from "../src/view-precision.js";
 
 test("parses implicit multiplication, pi, and supported functions", () => {
   const expression = parseExpression("2sin(pi / 2) + 3z");
@@ -61,4 +62,22 @@ test("keeps generated WGSL compatible with browser shader parsers", () => {
   assert.doesNotMatch(shader, /isNan/);
   assert.doesNotMatch(shader, /if \(palette == [678]\) return/);
   assert.match(shader, /let next = z - step/);
+});
+
+test("generates a compensated GPU path for deep views", () => {
+  const expression = parseExpression("sin(z) + z^3 - a");
+  const generated = toDsWgsl(expression.ast, expression.constants);
+  const shader = buildDeepShader(expression, expression.constants);
+  assert.match(generated.value, /ds_sin/);
+  assert.match(generated.derivative, /ds_mul/);
+  assert.match(shader, /struct DsComplex/);
+  assert.match(shader, /uniforms\.reference/);
+  assert.match(shader, /uniforms\.curvature/);
+  assert.match(shader, /root \* 2u/);
+});
+
+test("enters GPU precision detail before nonzero f32 pixels collapse", () => {
+  assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 6 }, 1440), false);
+  assert.equal(needsPrecisionDetail({ centerX: 1, centerY: 0, span: 1e-7 }, 1440), true);
+  assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-12 }, 1440), false);
 });

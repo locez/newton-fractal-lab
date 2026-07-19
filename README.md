@@ -2,7 +2,7 @@
 
 ## 中文
 
-Luna Newton Lab 是一个可交互探索牛顿分形的 Web 应用。它以 WebGPU fragment shader 为主渲染路径，在不支持 WebGPU 或渲染设备丢失时自动切换到低分辨率 CPU 预览，并把降级原因明确显示在界面中。
+Luna Newton Lab 是一个可交互探索牛顿分形的 Web 应用。它以 WebGPU fragment shader 为主渲染路径，普通视图使用快速 `f32` shader，深度缩放进入浮点精度边界后自动使用 GPU double-single shader 保持局部坐标精度；只有浏览器或 GPU 无法提供对应路径时才切换到低分辨率 CPU 预览，并把原因明确显示在界面中。
 
 ### 功能
 
@@ -11,7 +11,7 @@ Luna Newton Lab 是一个可交互探索牛顿分形的 Web 应用。它以 WebG
 - 自动生成用户常量滑块。支持自定义最小值、最大值和实时拖动更新。
 - 支持 `+ - * / ^`、隐式乘法，以及 `sin`、`cos`、`tan`、`ln`、`log`、`exp`、`sqrt`、`abs`、`pi`、`e` 和 `π`。
 - 根位置叠加、原点轴、边界轴和网格线可以独立组合。
-- 鼠标滚轮、按钮缩放和平移；视图范围使用数值保护，最小缩放跨度为 `1e-12`。
+- 鼠标滚轮、按钮缩放和平移；视图范围使用数值保护，最小缩放跨度为 `1e-12`。深缩放会显示 `GPU REBASE`：以当前中心的参考轨道重新在 GPU 上计算，缩小后自动回到 `WEBGPU ACTIVE`，不把旧帧放大冒充重新渲染。
 - 十种调色板：Viridis、Plasma、Magma、Inferno、Cividis、Turbo、Rainbow、Jet、Coolwarm、Spectral。
 - 设置面板可折叠、拖拽移动并调整透明度。
 
@@ -27,7 +27,7 @@ npm run dev
 
 然后打开 <http://127.0.0.1:4173>。直接双击 `index.html` 也能看到界面，但 WebGPU 和模块加载应通过本地 HTTP 服务测试。
 
-如果界面显示 `CPU PREVIEW`，请在 Edge 打开 `edge://settings/system`，开启“可用时使用图形加速”，重启 Edge，再检查 `edge://gpu` 的 Graphics Feature Status。应用会在没有适配器时保留 CPU 预览，不会阻止使用。
+如果界面显示 `CPU PREVIEW`，请在 Edge 打开 `edge://settings/system`，开启“可用时使用图形加速”，重启 Edge，再检查 `edge://gpu` 的 Graphics Feature Status。`GPU REBASE` 是正常的深缩放 GPU 模式；应用会在没有适配器或精度 shader 无法编译时保留 CPU 预览，并显示具体原因。
 
 ### GitHub Pages
 
@@ -45,7 +45,7 @@ npm run dev
 
 ## English
 
-Luna Newton Lab is an interactive Newton fractal laboratory. Its primary renderer is a WebGPU fragment shader. When WebGPU is unavailable or the device is lost, the application switches to a lower-resolution CPU preview and explains the limitation in the UI.
+Luna Newton Lab is an interactive Newton fractal laboratory. Its primary renderer is a WebGPU fragment shader. Standard views use a fast `f32` shader; deep views switch to a GPU double-single shader before nearby coordinates collapse, and only unsupported devices or shader failures use the lower-resolution CPU preview.
 
 ### Features
 
@@ -54,7 +54,7 @@ Luna Newton Lab is an interactive Newton fractal laboratory. Its primary rendere
 - User constants receive live sliders with editable minimum and maximum bounds.
 - Supports `+ - * / ^`, implicit multiplication, `sin`, `cos`, `tan`, `ln`, `log`, `exp`, `sqrt`, `abs`, `pi`, `e`, and `π`.
 - Root positions, origin axes, frame axes, and grid lines are independent overlay layers.
-- Mouse-wheel zoom, button zoom, and panning with a protected near-infinite range down to `1e-12`.
+- Mouse-wheel zoom, button zoom, and panning with a protected near-infinite range down to `1e-12`. Deep views show `GPU REBASE`: the current-center reference orbit is recomputed on the GPU, and zooming out returns to `WEBGPU ACTIVE` instead of upscaling an old frame.
 - Ten palettes: Viridis, Plasma, Magma, Inferno, Cividis, Turbo, Rainbow, Jet, Coolwarm, and Spectral.
 - The control deck can be collapsed, dragged, and made transparent.
 
@@ -70,7 +70,7 @@ npm run dev
 
 Open <http://127.0.0.1:4173>. Use the local HTTP server when testing module loading and WebGPU behavior.
 
-If the UI shows `CPU PREVIEW`, open `edge://settings/system`, enable “Use graphics acceleration when available”, restart Edge, and inspect Graphics Feature Status at `edge://gpu`. The app keeps a CPU preview available when no adapter can be returned.
+If the UI shows `CPU PREVIEW`, open `edge://settings/system`, enable “Use graphics acceleration when available”, restart Edge, and inspect Graphics Feature Status at `edge://gpu`. `GPU REBASE` is the expected GPU mode for deep zoom. The app keeps a CPU preview available when no adapter or precision shader can be returned.
 
 ### GitHub Pages
 

@@ -1,8 +1,14 @@
+import { cAbs, cAdd, cDiv, cSub, complex, isFiniteComplex } from "./complex.js";
+import { evaluateExpression, toDsWgsl, toWgsl } from "./parser.js";
 import { MAX_ROOTS } from "./root-finder.js";
-import { toWgsl } from "./parser.js";
 
 const MAX_CONSTANTS = 32;
-const UNIFORM_FLOATS = 140;
+const MAX_ITERATIONS = 512;
+const BASE_UNIFORM_FLOATS = 20 + MAX_CONSTANTS + MAX_CONSTANTS + MAX_ROOTS * 8;
+const REFERENCE_OFFSET = BASE_UNIFORM_FLOATS;
+const JACOBIAN_OFFSET = REFERENCE_OFFSET + (MAX_ITERATIONS + 1) * 4;
+const CURVATURE_OFFSET = JACOBIAN_OFFSET + MAX_ITERATIONS * 4;
+const UNIFORM_FLOATS = CURVATURE_OFFSET + MAX_ITERATIONS * 4;
 
 function gpuError(code, message) {
   const error = new Error(message);
@@ -15,8 +21,14 @@ struct Uniforms {
   bounds: vec4<f32>,
   viewport: vec4<f32>,
   render: vec4<f32>,
+  view: vec4<f32>,
+  origin: vec4<f32>,
   constants: array<vec4<f32>, 8>,
-  roots: array<vec4<f32>, ${MAX_ROOTS}>,
+  constantLow: array<vec4<f32>, 8>,
+  roots: array<vec4<f32>, ${MAX_ROOTS * 2}>,
+  reference: array<vec4<f32>, ${MAX_ITERATIONS + 1}>,
+  jacobian: array<vec4<f32>, ${MAX_ITERATIONS}>,
+  curvature: array<vec4<f32>, ${MAX_ITERATIONS}>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -158,7 +170,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
   var converged = false;
   var iterations = 0.0;
 
-  for (var iteration = 0u; iteration < 512u; iteration = iteration + 1u) {
+  for (var iteration = 0u; iteration < ${MAX_ITERATIONS}u; iteration = iteration + 1u) {
     if (f32(iteration) >= uniforms.viewport.z) { break; }
     let value = evaluate_value(z);
     let magnitude = length(value);
@@ -179,7 +191,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
   var nearest = 1e20;
   for (var root = 0u; root < ${MAX_ROOTS}u; root = root + 1u) {
     if (f32(root) >= uniforms.render.y) { break; }
-    let distance = length(z - uniforms.roots[root].xy);
+    let distance = length(z - uniforms.roots[root * 2u].xy);
     if (distance < nearest) {
       nearest = distance;
       rootIndex = i32(root);
@@ -203,6 +215,284 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
 `;
 }
 
+const doubleSinglePrelude = /* wgsl */ `
+struct DsFloat {
+  hi: f32,
+  lo: f32,
+}
+
+struct DsComplex {
+  hi: vec2<f32>,
+  lo: vec2<f32>,
+}
+
+fn ds_float(high: f32, low: f32) -> DsFloat {
+  var result: DsFloat;
+  result.hi = high;
+  result.lo = low;
+  return result;
+}
+
+fn ds_complex(high: vec2<f32>, low: vec2<f32>) -> DsComplex {
+  var result: DsComplex;
+  result.hi = high;
+  result.lo = low;
+  return result;
+}
+
+fn ds_real(high: f32, low: f32) -> DsComplex {
+  return ds_complex(vec2<f32>(high, 0.0), vec2<f32>(low, 0.0));
+}
+
+fn ds_from_vec(value: vec2<f32>) -> DsComplex {
+  return ds_complex(value, vec2<f32>(0.0));
+}
+
+fn ds_quick_two_sum(a: f32, b: f32) -> DsFloat {
+  let sum = a + b;
+  return ds_float(sum, b - (sum - a));
+}
+
+fn ds_two_sum(a: f32, b: f32) -> DsFloat {
+  let sum = a + b;
+  let part = sum - a;
+  return ds_float(sum, (a - (sum - part)) + (b - part));
+}
+
+fn ds_split(value: f32) -> DsFloat {
+  let scaled = 4097.0 * value;
+  let high = scaled - (scaled - value);
+  return ds_float(high, value - high);
+}
+
+fn ds_add_scalar(a: DsFloat, b: DsFloat) -> DsFloat {
+  let sum = ds_two_sum(a.hi, b.hi);
+  return ds_quick_two_sum(sum.hi, sum.lo + a.lo + b.lo);
+}
+
+fn ds_sub_scalar(a: DsFloat, b: DsFloat) -> DsFloat {
+  let sum = ds_two_sum(a.hi, -b.hi);
+  return ds_quick_two_sum(sum.hi, sum.lo + a.lo - b.lo);
+}
+
+fn ds_mul_scalar(a: DsFloat, b: DsFloat) -> DsFloat {
+  let product = a.hi * b.hi;
+  let splitA = ds_split(a.hi);
+  let splitB = ds_split(b.hi);
+  let productError = ((splitA.hi * splitB.hi - product) + splitA.hi * splitB.lo + splitA.lo * splitB.hi) + splitA.lo * splitB.lo;
+  let correction = productError + a.hi * b.lo + a.lo * b.hi + a.lo * b.lo;
+  return ds_quick_two_sum(product, correction);
+}
+
+fn ds_div_scalar(a: DsFloat, b: DsFloat) -> DsFloat {
+  if (abs(b.hi) < 1e-30) { return ds_float(0.0, 0.0); }
+  let quotient = a.hi / b.hi;
+  let remainder = ds_sub_scalar(a, ds_mul_scalar(b, ds_float(quotient, 0.0)));
+  let correction = (remainder.hi + remainder.lo) / b.hi;
+  return ds_add_scalar(ds_float(quotient, 0.0), ds_float(correction, 0.0));
+}
+
+fn ds_pack(real: DsFloat, imaginary: DsFloat) -> DsComplex {
+  return ds_complex(vec2<f32>(real.hi, imaginary.hi), vec2<f32>(real.lo, imaginary.lo));
+}
+
+fn ds_add(a: DsComplex, b: DsComplex) -> DsComplex {
+  return ds_pack(
+    ds_add_scalar(ds_float(a.hi.x, a.lo.x), ds_float(b.hi.x, b.lo.x)),
+    ds_add_scalar(ds_float(a.hi.y, a.lo.y), ds_float(b.hi.y, b.lo.y))
+  );
+}
+
+fn ds_sub(a: DsComplex, b: DsComplex) -> DsComplex {
+  return ds_pack(
+    ds_sub_scalar(ds_float(a.hi.x, a.lo.x), ds_float(b.hi.x, b.lo.x)),
+    ds_sub_scalar(ds_float(a.hi.y, a.lo.y), ds_float(b.hi.y, b.lo.y))
+  );
+}
+
+fn ds_neg(a: DsComplex) -> DsComplex {
+  return ds_complex(-a.hi, -a.lo);
+}
+
+fn ds_mul(a: DsComplex, b: DsComplex) -> DsComplex {
+  let ar = ds_float(a.hi.x, a.lo.x);
+  let ai = ds_float(a.hi.y, a.lo.y);
+  let br = ds_float(b.hi.x, b.lo.x);
+  let bi = ds_float(b.hi.y, b.lo.y);
+  return ds_pack(
+    ds_sub_scalar(ds_mul_scalar(ar, br), ds_mul_scalar(ai, bi)),
+    ds_add_scalar(ds_mul_scalar(ar, bi), ds_mul_scalar(ai, br))
+  );
+}
+
+fn ds_div(a: DsComplex, b: DsComplex) -> DsComplex {
+  let ar = ds_float(a.hi.x, a.lo.x);
+  let ai = ds_float(a.hi.y, a.lo.y);
+  let br = ds_float(b.hi.x, b.lo.x);
+  let bi = ds_float(b.hi.y, b.lo.y);
+  let denominator = ds_add_scalar(ds_mul_scalar(br, br), ds_mul_scalar(bi, bi));
+  return ds_pack(
+    ds_div_scalar(ds_add_scalar(ds_mul_scalar(ar, br), ds_mul_scalar(ai, bi)), denominator),
+    ds_div_scalar(ds_sub_scalar(ds_mul_scalar(ai, br), ds_mul_scalar(ar, bi)), denominator)
+  );
+}
+
+fn ds_value(a: DsComplex) -> vec2<f32> {
+  return a.hi + a.lo;
+}
+
+fn ds_length(a: DsComplex) -> f32 {
+  return length(ds_value(a));
+}
+
+fn ds_abs(a: DsComplex) -> DsComplex {
+  let radius = length(a.hi);
+  if (radius < 1e-30) { return ds_real(length(a.lo), 0.0); }
+  return ds_real(radius, dot(a.hi, a.lo) / radius);
+}
+
+fn ds_exp(a: DsComplex) -> DsComplex {
+  let high = c_exp(a.hi);
+  return ds_complex(high, c_mul(high, a.lo));
+}
+
+fn ds_log(a: DsComplex) -> DsComplex {
+  let high = c_log(a.hi);
+  return ds_complex(high, c_div(a.lo, a.hi));
+}
+
+fn ds_sqrt(a: DsComplex) -> DsComplex {
+  let high = c_sqrt(a.hi);
+  return ds_complex(high, c_div(0.5 * a.lo, high));
+}
+
+fn ds_sin(a: DsComplex) -> DsComplex {
+  let high = c_sin(a.hi);
+  return ds_complex(high, c_mul(c_cos(a.hi), a.lo));
+}
+
+fn ds_cos(a: DsComplex) -> DsComplex {
+  let high = c_cos(a.hi);
+  return ds_complex(high, c_mul(c_neg(c_sin(a.hi)), a.lo));
+}
+
+fn ds_tan(a: DsComplex) -> DsComplex {
+  let high = c_tan(a.hi);
+  let derivative = c_div(vec2<f32>(1.0, 0.0), c_mul(c_cos(a.hi), c_cos(a.hi)));
+  return ds_complex(high, c_mul(derivative, a.lo));
+}
+
+fn ds_pow(a: DsComplex, b: DsComplex) -> DsComplex {
+  let high = c_pow(a.hi, b.hi);
+  if (length(a.hi) < 1e-30) { return ds_complex(high, vec2<f32>(0.0)); }
+  let logarithm = c_log(a.hi);
+  let correction = c_add(c_mul(b.lo, logarithm), c_mul(b.hi, c_div(a.lo, a.hi)));
+  return ds_complex(high, c_mul(high, correction));
+}
+`;
+
+function buildDeepShader(expression, constantNames) {
+  const generated = toDsWgsl(expression.ast, constantNames);
+  return `${shaderPrelude}
+${doubleSinglePrelude}
+fn evaluate_value_ds(z: DsComplex) -> DsComplex {
+  return ${generated.value};
+}
+
+fn evaluate_derivative_ds(z: DsComplex) -> DsComplex {
+  return ${generated.derivative};
+}
+
+@fragment
+fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+  let centered = position.xy - uniforms.viewport.xy * 0.5;
+  let delta = vec2<f32>(
+    centered.x * uniforms.view.x / uniforms.viewport.x,
+    -centered.y * uniforms.view.y / uniforms.viewport.y
+  );
+  let referenceStart = ds_complex(
+    vec2<f32>(uniforms.origin.x, uniforms.origin.z),
+    vec2<f32>(uniforms.origin.y, uniforms.origin.w)
+  );
+  var offset = ds_from_vec(delta);
+  var z = ds_add(referenceStart, offset);
+  let viewSpan = max(uniforms.view.x, uniforms.view.y);
+  var directMode = false;
+  var converged = false;
+  var iterations = 0.0;
+
+  for (var iteration = 0u; iteration < ${MAX_ITERATIONS}u; iteration = iteration + 1u) {
+    if (f32(iteration) >= uniforms.viewport.z) { break; }
+    iterations = f32(iteration);
+    if (directMode) {
+      let value = evaluate_value_ds(z);
+      if (ds_length(value) <= uniforms.viewport.w) {
+        converged = true;
+        break;
+      }
+      let derivative = evaluate_derivative_ds(z);
+      if (ds_length(derivative) < 1e-7) { break; }
+      let next = ds_sub(z, ds_div(value, derivative));
+      if (!(ds_length(next) <= 1e8)) { break; }
+      z = next;
+    } else {
+      let jacobian = ds_complex(
+        uniforms.jacobian[iteration].xy,
+        uniforms.jacobian[iteration].zw
+      );
+      let curvature = ds_complex(
+        uniforms.curvature[iteration].xy,
+        uniforms.curvature[iteration].zw
+      );
+      let linear = ds_mul(jacobian, offset);
+      let quadratic = ds_mul(ds_real(0.5, 0.0), ds_mul(curvature, ds_mul(offset, offset)));
+      let nextOffset = ds_add(linear, quadratic);
+      let nextReference = ds_complex(
+        uniforms.reference[iteration + 1u].xy,
+        uniforms.reference[iteration + 1u].zw
+      );
+      let next = ds_add(nextReference, nextOffset);
+      if (!(ds_length(next) <= 1e8)) { break; }
+      if (ds_length(nextOffset) > 0.01) { directMode = true; }
+      offset = nextOffset;
+      z = next;
+    }
+  }
+
+  var rootIndex = -1;
+  var nearest = 1e20;
+  for (var root = 0u; root < ${MAX_ROOTS}u; root = root + 1u) {
+    if (f32(root) >= uniforms.render.y) { break; }
+    let rootHigh = uniforms.roots[root * 2u];
+    let rootLow = uniforms.roots[root * 2u + 1u];
+    let rootPoint = ds_complex(rootHigh.xy, rootLow.xy);
+    let distance = ds_length(ds_sub(z, rootPoint));
+    if (distance < nearest) {
+      nearest = distance;
+      rootIndex = i32(root);
+    }
+  }
+
+  if (!converged) {
+    converged = rootIndex >= 0 && nearest <= max(uniforms.viewport.w * 8.0, 1e-6);
+  }
+  let progress = min(iterations / max(uniforms.viewport.z, 1.0), 1.0);
+  var color = vec3<f32>(0.006, 0.010, 0.014);
+  if (converged && rootIndex >= 0) {
+    let slot = (f32(rootIndex) + 0.5) / max(uniforms.render.y, 1.0);
+    let base = palette_color(i32(uniforms.render.x), fract(slot));
+    let shade = 0.38 + 0.72 * pow(1.0 - progress, 0.22);
+    let edge = smoothstep(0.0, 0.18, nearest / max(viewSpan, 1e-30));
+    color = base * shade * (0.78 + 0.22 * edge);
+  } else {
+    let trace = 0.04 + 0.12 * (1.0 - progress);
+    color = vec3<f32>(trace * 0.8, trace, trace * 0.92);
+  }
+  return vec4<f32>(color, 1.0);
+}
+`;
+}
+
 function boundsForView(view, width, height) {
   const spanX = Math.max(view.span, 1e-18);
   const spanY = spanX * Math.max(1, height / Math.max(width, 1));
@@ -212,6 +502,79 @@ function boundsForView(view, width, height) {
     view.centerX + spanX * 0.5,
     view.centerY + spanY * 0.5,
   ];
+}
+
+function splitFloat64(value) {
+  const high = Math.fround(Number(value) || 0);
+  return [high, (Number(value) || 0) - high];
+}
+
+function newtonMap(expression, z, constants) {
+  const result = evaluateExpression(expression.ast, z, constants);
+  if (!isFiniteComplex(result.value) || !isFiniteComplex(result.derivative) || cAbs(result.derivative) < 1e-10) return null;
+  const step = cDiv(result.value, result.derivative);
+  const next = cSub(z, step);
+  if (!isFiniteComplex(next) || cAbs(next) > 1e8) return null;
+  return next;
+}
+
+function writeSplitComplex(target, offset, value) {
+  const [realHigh, realLow] = splitFloat64(value[0]);
+  const [imaginaryHigh, imaginaryLow] = splitFloat64(value[1]);
+  target[offset] = realHigh;
+  target[offset + 1] = imaginaryHigh;
+  target[offset + 2] = realLow;
+  target[offset + 3] = imaginaryLow;
+}
+
+function buildReferenceOrbit(state) {
+  const reference = new Float32Array((MAX_ITERATIONS + 1) * 4);
+  const jacobian = new Float32Array(MAX_ITERATIONS * 4);
+  const curvature = new Float32Array(MAX_ITERATIONS * 4);
+  let z = complex(state.view.centerX, state.view.centerY);
+  let stopped = false;
+
+  for (let iteration = 0; iteration <= MAX_ITERATIONS; iteration += 1) {
+    writeSplitComplex(reference, iteration * 4, z);
+    if (iteration === MAX_ITERATIONS) break;
+    if (stopped) continue;
+
+    const next = newtonMap(state.expression, z, state.constants);
+    if (!next) {
+      stopped = true;
+      continue;
+    }
+
+    const stepSize = Math.max(1e-7, Math.min(1e-3, Math.max(cAbs(z), 1) * 1e-6));
+    const plus = newtonMap(state.expression, [z[0] + stepSize, z[1]], state.constants);
+    const minus = newtonMap(state.expression, [z[0] - stepSize, z[1]], state.constants);
+    if (plus && minus) {
+      const denominator = complex(2 * stepSize, 0);
+      const first = cDiv(cSub(plus, minus), denominator);
+      const secondNumerator = cSub(cAdd(plus, minus), [2 * next[0], 2 * next[1]]);
+      const second = cDiv(secondNumerator, complex(stepSize * stepSize, 0));
+      writeSplitComplex(jacobian, iteration * 4, first);
+      writeSplitComplex(curvature, iteration * 4, second);
+    }
+    z = next;
+  }
+
+  return { reference, jacobian, curvature };
+}
+
+function referenceKey(state) {
+  const constants = Object.keys(state.constants)
+    .sort()
+    .map((name) => `${name}:${state.constants[name]}`)
+    .join(",");
+  return [
+    state.expression.source,
+    state.view.centerX,
+    state.view.centerY,
+    state.iterations,
+    state.tolerance,
+    constants,
+  ].join("|");
 }
 
 export class GpuRenderer {
@@ -224,8 +587,12 @@ export class GpuRenderer {
     this.uniformBuffer = null;
     this.pipeline = null;
     this.bindGroup = null;
+    this.detailPipeline = null;
+    this.detailBindGroup = null;
+    this.detailSupported = false;
     this.expression = null;
     this.constantNames = [];
+    this.referenceCache = null;
     this.lastGpuTime = 0;
     this.ready = false;
   }
@@ -256,6 +623,9 @@ export class GpuRenderer {
     this.uniformBuffer = this.device.createBuffer({
       size: UNIFORM_FLOATS * Float32Array.BYTES_PER_ELEMENT,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.device.addEventListener("uncapturederror", (event) => {
+      console.error("[WebGPU] uncaptured error", event.error);
     });
     this.device.lost.then((info) => {
       this.ready = false;
@@ -291,6 +661,31 @@ export class GpuRenderer {
       layout: this.pipeline.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }],
     });
+
+    this.detailPipeline = null;
+    this.detailBindGroup = null;
+    this.detailSupported = false;
+    try {
+      const detailModule = this.device.createShaderModule({ code: buildDeepShader(expression, constantNames) });
+      if (typeof detailModule.getCompilationInfo === "function") {
+        const compilation = await detailModule.getCompilationInfo();
+        const errors = compilation.messages.filter((message) => message.type === "error");
+        if (errors.length) throw new Error(errors[0].message);
+      }
+      this.detailPipeline = this.device.createRenderPipeline({
+        layout: "auto",
+        vertex: { module: detailModule, entryPoint: "vertex_main" },
+        fragment: { module: detailModule, entryPoint: "fragment_main", targets: [{ format: this.format }] },
+        primitive: { topology: "triangle-list" },
+      });
+      this.detailBindGroup = this.device.createBindGroup({
+        layout: this.detailPipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }],
+      });
+      this.detailSupported = true;
+    } catch (error) {
+      console.warn("GPU precision detail shader is unavailable; standard GPU mode remains active.", error);
+    }
     this.expression = expression;
     this.constantNames = constantNames;
   }
@@ -307,22 +702,47 @@ export class GpuRenderer {
     return { width, height, pixelRatio };
   }
 
-  render(state, roots) {
-    if (!this.ready || !this.pipeline || !this.bindGroup) return null;
+  render(state, roots, detail = false) {
+    const pipeline = detail ? this.detailPipeline : this.pipeline;
+    const bindGroup = detail ? this.detailBindGroup : this.bindGroup;
+    if (!this.ready || !pipeline || !bindGroup) return null;
     const { width, height } = this.resize();
     const bounds = boundsForView(state.view, width, height);
+    const spanX = Math.max(state.view.span, 1e-18);
+    const spanY = spanX * Math.max(1, height / Math.max(width, 1));
+    const [centerXHigh, centerXLow] = splitFloat64(state.view.centerX);
+    const [centerYHigh, centerYLow] = splitFloat64(state.view.centerY);
     const uniforms = new Float32Array(UNIFORM_FLOATS);
     uniforms.set(bounds, 0);
     uniforms.set([width, height, state.iterations, state.tolerance], 4);
     uniforms.set([state.paletteIndex, roots.length, 0, 0], 8);
+    uniforms.set([spanX, spanY, 0, 0], 12);
+    uniforms.set([centerXHigh, centerXLow, centerYHigh, centerYLow], 16);
     this.constantNames.forEach((name, index) => {
-      uniforms[12 + index] = Number(state.constants[name]) || 0;
+      const [high, low] = splitFloat64(state.constants[name]);
+      const componentOffset = index;
+      uniforms[20 + componentOffset] = high;
+      uniforms[52 + componentOffset] = low;
     });
-    const rootsOffset = 44;
+    const rootsOffset = 84;
     roots.forEach((root, index) => {
-      uniforms[rootsOffset + index * 4] = root.re;
-      uniforms[rootsOffset + index * 4 + 1] = root.im;
+      const [realHigh, realLow] = splitFloat64(root.re);
+      const [imaginaryHigh, imaginaryLow] = splitFloat64(root.im);
+      const offset = rootsOffset + index * 8;
+      uniforms[offset] = realHigh;
+      uniforms[offset + 1] = imaginaryHigh;
+      uniforms[offset + 4] = realLow;
+      uniforms[offset + 5] = imaginaryLow;
     });
+    if (detail) {
+      const key = referenceKey(state);
+      if (!this.referenceCache || this.referenceCache.key !== key) {
+        this.referenceCache = { key, ...buildReferenceOrbit(state) };
+      }
+      uniforms.set(this.referenceCache.reference, REFERENCE_OFFSET);
+      uniforms.set(this.referenceCache.jacobian, JACOBIAN_OFFSET);
+      uniforms.set(this.referenceCache.curvature, CURVATURE_OFFSET);
+    }
     this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms);
 
     const start = performance.now();
@@ -335,8 +755,8 @@ export class GpuRenderer {
         storeOp: "store",
       }],
     });
-    pass.setPipeline(this.pipeline);
-    pass.setBindGroup(0, this.bindGroup);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
     pass.draw(3);
     pass.end();
     this.device.queue.submit([encoder.finish()]);
@@ -350,4 +770,4 @@ export class GpuRenderer {
   }
 }
 
-export { MAX_CONSTANTS, buildShader };
+export { MAX_CONSTANTS, buildDeepShader, buildShader };

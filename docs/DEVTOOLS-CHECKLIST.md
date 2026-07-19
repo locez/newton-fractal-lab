@@ -14,6 +14,7 @@ Use a current Microsoft Edge build over `http://127.0.0.1:4173` after `npm run d
 - [ ] Toggle origin axes, frame axes, grid lines, and root positions independently and in combinations.
 - [ ] Switch through all ten palettes; colors and root markers update.
 - [ ] Use wheel zoom at the center and off-center; the cursor location stays anchored. Use `+`, `-`, and Reset.
+- [ ] Pan to a nonzero center and zoom until the status reads `GPU REBASE`; inspect a translated Newton boundary and confirm the GPU recomputes distinct basins instead of enlarging a stale frame. Zoom out and confirm `WEBGPU ACTIVE` returns.
 - [ ] Drag the canvas to pan; coordinate readouts and tick labels update.
 - [ ] Collapse and restore the control deck, drag its header, and change panel opacity.
 
@@ -42,6 +43,7 @@ Use a current Microsoft Edge build over `http://127.0.0.1:4173` after `npm run d
 
 - Edge `149.0.4022.69` was driven through the DevTools Protocol against the local server.
 - The interaction matrix passed for Apply gating, invalid input, multi-variable warning, live constant updates, all overlays, palette switching, zoom, and panel dragging.
+- Chrome with a physical NVIDIA WebGPU adapter entered `GPU REBASE` at a nonzero deep-zoom center, kept a translated quadratic boundary visible, compiled the supported function combination, and returned to `WEBGPU ACTIVE` after zooming out.
 - The headless container exposed `navigator.gpu` but had no compatible adapter, so the CPU fallback path was exercised. A physical WebGPU adapter is still required to measure the hardware renderer itself.
 - When Edge returns no adapter, verify `edge://settings/system` has graphics acceleration enabled and review `edge://gpu` before treating the result as an application error.
 

@@ -383,6 +383,78 @@ function emitWgsl(node, constants, mode = "value") {
   return "vec2<f32>(0.0, 0.0)";
 }
 
+function splitNumberForWgsl(value) {
+  const high = Math.fround(value);
+  return [numberForWgsl(high), numberForWgsl(value - high)];
+}
+
+function emitDsReal(value) {
+  const [high, low] = splitNumberForWgsl(value);
+  return `ds_real(${high}, ${low})`;
+}
+
+function emitDsConstant(name, constants) {
+  const index = constants.indexOf(name);
+  const component = ["x", "y", "z", "w"][index % 4];
+  const slot = Math.floor(index / 4);
+  return `ds_real(uniforms.constants[${slot}].${component}, uniforms.constantLow[${slot}].${component})`;
+}
+
+function emitDsWgsl(node, constants, mode = "value") {
+  if (node.type === "number") return mode === "value" ? emitDsReal(node.value) : "ds_real(0.0, 0.0)";
+  if (node.type === "variable") return mode === "value" ? "z" : "ds_real(1.0, 0.0)";
+  if (node.type === "constant") {
+    if (node.name === "pi") return mode === "value" ? emitDsReal(Math.PI) : "ds_real(0.0, 0.0)";
+    if (node.name === "e") return mode === "value" ? emitDsReal(Math.E) : "ds_real(0.0, 0.0)";
+    return mode === "value" ? emitDsConstant(node.name, constants) : "ds_real(0.0, 0.0)";
+  }
+  if (node.type === "unary") {
+    return mode === "value"
+      ? `ds_neg(${emitDsWgsl(node.argument, constants, "value")})`
+      : `ds_neg(${emitDsWgsl(node.argument, constants, "derivative")})`;
+  }
+  if (node.type === "binary") {
+    const left = emitDsWgsl(node.left, constants, "value");
+    const right = emitDsWgsl(node.right, constants, "value");
+    const leftDerivative = emitDsWgsl(node.left, constants, "derivative");
+    const rightDerivative = emitDsWgsl(node.right, constants, "derivative");
+    if (mode === "value") {
+      const fn = { "+": "ds_add", "-": "ds_sub", "*": "ds_mul", "/": "ds_div", "^": "ds_pow" }[node.operator];
+      return `${fn}(${left}, ${right})`;
+    }
+    if (node.operator === "+") return `ds_add(${leftDerivative}, ${rightDerivative})`;
+    if (node.operator === "-") return `ds_sub(${leftDerivative}, ${rightDerivative})`;
+    if (node.operator === "*") return `ds_add(ds_mul(${leftDerivative}, ${right}), ds_mul(${left}, ${rightDerivative}))`;
+    if (node.operator === "/") {
+      return `ds_div(ds_sub(ds_mul(${leftDerivative}, ${right}), ds_mul(${left}, ${rightDerivative})), ds_mul(${right}, ${right}))`;
+    }
+    return `ds_mul(ds_pow(${left}, ${right}), ds_add(ds_mul(${rightDerivative}, ds_log(${left})), ds_mul(${right}, ds_div(${leftDerivative}, ${left}))))`;
+  }
+  if (node.type === "call") {
+    const argument = emitDsWgsl(node.argument, constants, "value");
+    const derivative = emitDsWgsl(node.argument, constants, "derivative");
+    const functionName = {
+      sin: "ds_sin",
+      cos: "ds_cos",
+      tan: "ds_tan",
+      ln: "ds_log",
+      log: "ds_log",
+      exp: "ds_exp",
+      sqrt: "ds_sqrt",
+      abs: "ds_abs",
+    }[node.name];
+    if (mode === "value") return `${functionName}(${argument})`;
+    if (node.name === "sin") return `ds_mul(ds_cos(${argument}), ${derivative})`;
+    if (node.name === "cos") return `ds_mul(ds_neg(ds_sin(${argument})), ${derivative})`;
+    if (node.name === "tan") return `ds_mul(ds_div(ds_real(1.0, 0.0), ds_mul(ds_cos(${argument}), ds_cos(${argument}))), ${derivative})`;
+    if (node.name === "ln" || node.name === "log") return `ds_mul(ds_div(ds_real(1.0, 0.0), ${argument}), ${derivative})`;
+    if (node.name === "exp") return `ds_mul(ds_exp(${argument}), ${derivative})`;
+    if (node.name === "sqrt") return `ds_mul(ds_div(ds_real(0.5, 0.0), ds_sqrt(${argument})), ${derivative})`;
+    return "ds_real(0.0, 0.0)";
+  }
+  return "ds_real(0.0, 0.0)";
+}
+
 export function parseExpression(source) {
   const trimmed = String(source || "").trim();
   const ast = new Parser(trimmed).parse();
@@ -403,5 +475,12 @@ export function toWgsl(ast, constants = []) {
   return {
     value: emitWgsl(ast, constants, "value"),
     derivative: emitWgsl(ast, constants, "derivative"),
+  };
+}
+
+export function toDsWgsl(ast, constants = []) {
+  return {
+    value: emitDsWgsl(ast, constants, "value"),
+    derivative: emitDsWgsl(ast, constants, "derivative"),
   };
 }

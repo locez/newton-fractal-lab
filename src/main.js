@@ -4,6 +4,7 @@ import { renderCpu, clearCpuCanvas } from "./cpu-renderer.js";
 import { findRoots } from "./root-finder.js";
 import { PALETTES } from "./palettes.js";
 import { drawOverlay, formatComplexPoint, screenToWorld } from "./overlay.js";
+import { needsPrecisionDetail } from "./view-precision.js";
 
 const fractalCanvas = document.querySelector("#fractal-canvas");
 const cpuCanvas = document.querySelector("#cpu-canvas");
@@ -50,6 +51,7 @@ const state = {
   overlays: { axes: true, border: true, grid: false, roots: true },
   roots: [],
   mode: "starting",
+  precisionDetail: false,
   cursor: null,
 };
 
@@ -241,14 +243,23 @@ function renderNow() {
   renderQueued = false;
   let metrics;
   try {
-    metrics = renderer === "gpu"
-      ? gpuRenderer.render(state, state.roots)
+    const wantsPrecisionDetail = renderer === "gpu" && needsPrecisionDetail(state.view, viewSize().width);
+    if (wantsPrecisionDetail && !gpuRenderer.detailSupported) {
+      switchToCpu("This GPU could not compile the precision detail shader; CPU double precision preview is active.");
+    } else if (renderer === "gpu" && wantsPrecisionDetail && !state.precisionDetail) {
+      enterGpuDetail();
+    } else if (renderer === "gpu" && !wantsPrecisionDetail && state.precisionDetail) {
+      leaveGpuDetail();
+    }
+    const usingGpu = renderer === "gpu";
+    metrics = usingGpu
+      ? gpuRenderer.render(state, state.roots, state.precisionDetail)
       : renderCpu(cpuCanvas, state, state.roots);
     if (metrics) {
       renderTime.textContent = `${metrics.renderTime.toFixed(1)} ms`;
-      if (renderer === "gpu" && metrics.renderTime > 50) slowGpuSamples += 1;
+      if (usingGpu && metrics.renderTime > 50) slowGpuSamples += 1;
       else slowGpuSamples = Math.max(0, slowGpuSamples - 1);
-      if (renderer === "gpu" && slowGpuSamples >= 5) {
+      if (usingGpu && slowGpuSamples >= 5) {
         showSupportNotice("GPU render is under load", "Try fewer iterations or a smaller browser window for smoother interaction.", "warning");
         slowGpuSamples = 0;
       }
@@ -269,12 +280,29 @@ function scheduleRender() {
 
 function switchToCpu(message) {
   renderer = "cpu";
+  state.precisionDetail = false;
   updateEngineStatus("CPU PREVIEW", "cpu");
   fractalCanvas.classList.add("is-hidden");
   cpuCanvas.classList.remove("is-hidden");
   clearCpuCanvas(cpuCanvas);
   if (message) showSupportNotice("WebGPU unavailable", message, "fallback");
   scheduleRender();
+}
+
+function enterGpuDetail() {
+  state.precisionDetail = true;
+  updateEngineStatus("GPU REBASE", "gpu-detail");
+  showSupportNotice(
+    "GPU reference rebase",
+    "Deep zoom is recomputed on the GPU from the current center orbit. Pixels carry local perturbations, then switch to direct GPU Newton steps when needed.",
+    "warning",
+  );
+}
+
+function leaveGpuDetail() {
+  state.precisionDetail = false;
+  updateEngineStatus("WEBGPU ACTIVE", "gpu");
+  if (supportTitle.textContent === "GPU reference rebase") supportBanner.classList.add("is-hidden");
 }
 
 async function setGpuExpression(expression, constantNames) {
