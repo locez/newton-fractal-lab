@@ -28,7 +28,8 @@ export function encodeSpan(view, aspect = 1) {
   const exponent = spanLog2(view);
   const sharedExponent = Math.floor(exponent);
   const mantissa = 2 ** (exponent - sharedExponent);
-  const verticalMantissa = mantissa * Math.max(1, aspect);
+  const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+  const verticalMantissa = mantissa * safeAspect;
   return { mantissa, verticalMantissa, exponent: sharedExponent };
 }
 

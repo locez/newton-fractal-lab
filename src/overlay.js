@@ -3,12 +3,14 @@ import { spanValue } from "./view-scale.js";
 
 function boundsForView(view, width, height) {
   const spanX = spanValue(view);
-  const spanY = spanX * Math.max(1, height / Math.max(width, 1));
+  const spanY = spanX * height / Math.max(width, 1);
+  const centerX = view.centerX + (Number.isFinite(view.centerXLow) ? view.centerXLow : 0);
+  const centerY = view.centerY + (Number.isFinite(view.centerYLow) ? view.centerYLow : 0);
   return {
-    minX: view.centerX - spanX * 0.5,
-    maxX: view.centerX + spanX * 0.5,
-    minY: view.centerY - spanY * 0.5,
-    maxY: view.centerY + spanY * 0.5,
+    minX: centerX - spanX * 0.5,
+    maxX: centerX + spanX * 0.5,
+    minY: centerY - spanY * 0.5,
+    maxY: centerY + spanY * 0.5,
     spanX,
     spanY,
   };
@@ -25,39 +27,49 @@ function niceStep(span) {
   return Math.max(factor * magnitude, Number.MIN_VALUE);
 }
 
-function formatTick(value) {
+function formatTick(value, step) {
   if (value === 0) return "0";
   const magnitude = Math.abs(value);
-  if (magnitude >= 1000 || magnitude < 0.001) return value.toExponential(1).replace("e+", "e");
-  if (magnitude >= 10) return value.toFixed(1);
-  return value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+  if (magnitude >= 1000 || magnitude < 0.001) return value.toExponential(2).replace("e+", "e");
+  const stepMagnitude = Math.abs(step);
+  const decimalPlaces = stepMagnitude > 0
+    ? Math.max(0, Math.min(8, -Math.floor(Math.log10(stepMagnitude))))
+    : 3;
+  return value.toFixed(decimalPlaces).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function forEachTick(minimum, maximum, step, callback) {
+  if (!(step > 0)) return;
+  const first = Math.ceil(minimum / step - 1e-10);
+  const last = Math.floor(maximum / step + 1e-10);
+  for (let index = first, count = 0; index <= last && count < 100; index += 1, count += 1) {
+    callback(index * step);
+  }
 }
 
 function drawGrid(context, bounds, width, height, step) {
-  const startX = Math.ceil(bounds.minX / step) * step;
-  const startY = Math.ceil(bounds.minY / step) * step;
   context.lineWidth = 1;
   context.strokeStyle = "rgba(178, 216, 204, 0.10)";
   context.fillStyle = "rgba(178, 216, 204, 0.42)";
   context.font = "9px 'DM Mono', monospace";
   context.textBaseline = "top";
 
-  for (let value = startX, count = 0; value <= bounds.maxX && count < 100; value += step, count += 1) {
+  forEachTick(bounds.minX, bounds.maxX, step, (value) => {
     const x = ((value - bounds.minX) / bounds.spanX) * width;
     context.beginPath();
     context.moveTo(x, 0);
     context.lineTo(x, height);
     context.stroke();
-    if (Math.abs(value) > step * 0.1) context.fillText(formatTick(value), x + 4, 7);
-  }
-  for (let value = startY, count = 0; value <= bounds.maxY && count < 100; value += step, count += 1) {
+    if (Math.abs(value) > step * 0.1) context.fillText(formatTick(value, step), x + 4, 7);
+  });
+  forEachTick(bounds.minY, bounds.maxY, step, (value) => {
     const y = ((bounds.maxY - value) / bounds.spanY) * height;
     context.beginPath();
     context.moveTo(0, y);
     context.lineTo(width, y);
     context.stroke();
-    if (Math.abs(value) > step * 0.1) context.fillText(formatTick(value), 7, y + 4);
-  }
+    if (Math.abs(value) > step * 0.1) context.fillText(formatTick(value, step), 7, y + 4);
+  });
 }
 
 function drawOriginAxes(context, bounds, width, height, step) {
@@ -73,15 +85,14 @@ function drawOriginAxes(context, bounds, width, height, step) {
     context.moveTo(xAtZero, 0);
     context.lineTo(xAtZero, height);
     context.stroke();
-    const start = Math.ceil(bounds.minY / step) * step;
-    for (let value = start, count = 0; value <= bounds.maxY && count < 100; value += step, count += 1) {
+    forEachTick(bounds.minY, bounds.maxY, step, (value) => {
       const y = ((bounds.maxY - value) / bounds.spanY) * height;
       context.beginPath();
       context.moveTo(xAtZero - 3, y);
       context.lineTo(xAtZero + 3, y);
       context.stroke();
-      if (Math.abs(value) > step * 0.1) context.fillText(formatTick(value), xAtZero + 7, y + 3);
-    }
+      if (Math.abs(value) > step * 0.1) context.fillText(formatTick(value, step), xAtZero + 7, y + 3);
+    });
   }
 
   if (yAtZero >= 0 && yAtZero <= height) {
@@ -89,16 +100,15 @@ function drawOriginAxes(context, bounds, width, height, step) {
     context.moveTo(0, yAtZero);
     context.lineTo(width, yAtZero);
     context.stroke();
-    const start = Math.ceil(bounds.minX / step) * step;
     context.textBaseline = "bottom";
-    for (let value = start, count = 0; value <= bounds.maxX && count < 100; value += step, count += 1) {
+    forEachTick(bounds.minX, bounds.maxX, step, (value) => {
       const x = ((value - bounds.minX) / bounds.spanX) * width;
       context.beginPath();
       context.moveTo(x, yAtZero - 3);
       context.lineTo(x, yAtZero + 3);
       context.stroke();
-      if (Math.abs(value) > step * 0.1) context.fillText(formatTick(value), x + 4, yAtZero - 6);
-    }
+      if (Math.abs(value) > step * 0.1) context.fillText(formatTick(value, step), x + 4, yAtZero - 6);
+    });
   }
 }
 
@@ -186,7 +196,13 @@ export function screenToWorld(view, x, y, width, height) {
 }
 
 export function formatComplexPoint(point) {
-  const re = Math.abs(point.re) < 1e-9 ? 0 : point.re;
-  const im = Math.abs(point.im) < 1e-9 ? 0 : point.im;
-  return `${re.toFixed(4)} ${im >= 0 ? "+" : "-"} ${Math.abs(im).toFixed(4)}i`;
+  const format = (value) => {
+    if (value === 0) return "0";
+    const magnitude = Math.abs(value);
+    if (magnitude >= 1000 || magnitude < 0.001) return value.toExponential(4).replace("e+", "e");
+    return value.toFixed(4);
+  };
+  return `${format(point.re)} ${point.im >= 0 ? "+" : "-"} ${format(Math.abs(point.im))}i`;
 }
+
+export { formatTick };

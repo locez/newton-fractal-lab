@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { cAbs } from "../src/complex.js";
 import { buildDeepShader, buildShader } from "../src/gpu-renderer.js";
-import { evaluateExpression, ExpressionError, parseExpression, toDsWgsl, toWgsl } from "../src/parser.js";
+import { evaluateExpression, ExpressionError, parseExpression, toDsWgsl, toScaledWgsl, toWgsl } from "../src/parser.js";
 import { findRoots } from "../src/root-finder.js";
+import { formatTick } from "../src/overlay.js";
 import { needsPrecisionDetail } from "../src/view-precision.js";
 import { encodeSpan, setSpanLog2, spanLog2, spanValue } from "../src/view-scale.js";
 import { addCenterDelta, centerDifference, encodeScaledDoubleDouble } from "../src/view-center.js";
@@ -69,20 +70,34 @@ test("keeps generated WGSL compatible with browser shader parsers", () => {
 test("generates a compensated GPU path for deep views", () => {
   const expression = parseExpression("sin(z) + z^3 - a");
   const generated = toDsWgsl(expression.ast, expression.constants);
+  const scaled = toScaledWgsl(expression.ast, expression.constants);
   const shader = buildDeepShader(expression, expression.constants);
   assert.match(generated.value, /ds_sin/);
   assert.match(generated.derivative, /ds_mul/);
+  assert.match(scaled.value, /sc_mul/);
+  assert.match(scaled.derivative, /sc_mul/);
   assert.match(shader, /struct DsComplex/);
   assert.match(shader, /uniforms\.reference/);
   assert.match(shader, /uniforms\.curvature/);
   assert.match(shader, /root \* 2u/);
+  assert.match(shader, /uniforms\.render\.z/);
+  assert.match(shader, /sc_to_ds/);
 });
 
 test("enters GPU precision detail before nonzero f32 pixels collapse", () => {
   assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 6 }, 1440), false);
   assert.equal(needsPrecisionDetail({ centerX: 1, centerY: 0, span: 1e-7 }, 1440), true);
-  assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-12 }, 1440), false);
+  assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-4 }, 1440), true);
+  assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-3 }, 1440), false);
+  assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-12 }, 1440), true);
+  assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-20 }, 1440), true);
   assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-40 }, 1440), true);
+});
+
+test("keeps axis tick labels distinct at tiny scales", () => {
+  assert.equal(formatTick(1, 1), "1");
+  assert.equal(formatTick(1e-46, 1e-46), "1.00e-46");
+  assert.equal(formatTick(2e-46, 1e-46), "2.00e-46");
 });
 
 test("keeps GPU scale exponents after JavaScript numbers underflow", () => {
@@ -91,6 +106,11 @@ test("keeps GPU scale exponents after JavaScript numbers underflow", () => {
   assert.equal(spanLog2(view), -2000);
   assert.equal(spanValue(view), Number.MIN_VALUE);
   assert.equal(encodeSpan(view).exponent, -2000);
+});
+
+test("keeps complex-plane units square on wide canvases", () => {
+  const encoded = encodeSpan({ span: 6 }, 0.5);
+  assert.equal(encoded.verticalMantissa, encoded.mantissa * 0.5);
 });
 
 test("preserves drag-sized center deltas below a Number ulp", () => {

@@ -5,12 +5,14 @@ import { spanValue } from "./view-scale.js";
 
 function boundsForView(view, width, height) {
   const spanX = spanValue(view);
-  const spanY = spanX * Math.max(1, height / Math.max(width, 1));
+  const spanY = spanX * height / Math.max(width, 1);
+  const centerX = view.centerX + (Number.isFinite(view.centerXLow) ? view.centerXLow : 0);
+  const centerY = view.centerY + (Number.isFinite(view.centerYLow) ? view.centerYLow : 0);
   return {
-    minX: view.centerX - spanX * 0.5,
-    maxX: view.centerX + spanX * 0.5,
-    minY: view.centerY - spanY * 0.5,
-    maxY: view.centerY + spanY * 0.5,
+    minX: centerX - spanX * 0.5,
+    maxX: centerX + spanX * 0.5,
+    minY: centerY - spanY * 0.5,
+    maxY: centerY + spanY * 0.5,
     spanX,
     spanY,
   };

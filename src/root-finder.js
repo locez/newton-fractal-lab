@@ -6,12 +6,14 @@ const MAX_ROOTS = 24;
 
 function boundsForView(view, width, height) {
   const spanX = spanValue(view);
-  const spanY = spanX * Math.max(1, height / Math.max(width, 1));
+  const spanY = spanX * height / Math.max(width, 1);
+  const centerX = view.centerX + (Number.isFinite(view.centerXLow) ? view.centerXLow : 0);
+  const centerY = view.centerY + (Number.isFinite(view.centerYLow) ? view.centerYLow : 0);
   return {
-    minX: view.centerX - spanX * 0.5,
-    maxX: view.centerX + spanX * 0.5,
-    minY: view.centerY - spanY * 0.5,
-    maxY: view.centerY + spanY * 0.5,
+    minX: centerX - spanX * 0.5,
+    maxX: centerX + spanX * 0.5,
+    minY: centerY - spanY * 0.5,
+    maxY: centerY + spanY * 0.5,
     spanX,
     spanY,
   };
@@ -33,8 +35,10 @@ export function findRoots(expression, constants, view, width = 1200, height = 80
   const tolerance = Math.max(1e-7, range * 2e-5);
   const roots = [];
   const gridSize = 17;
-  const searchMinX = view.centerX - range;
-  const searchMinY = view.centerY - range;
+  const centerX = view.centerX + (Number.isFinite(view.centerXLow) ? view.centerXLow : 0);
+  const centerY = view.centerY + (Number.isFinite(view.centerYLow) ? view.centerYLow : 0);
+  const searchMinX = centerX - range;
+  const searchMinY = centerY - range;
 
   for (let gy = 0; gy < gridSize && roots.length < MAX_ROOTS; gy += 1) {
     for (let gx = 0; gx < gridSize && roots.length < MAX_ROOTS; gx += 1) {

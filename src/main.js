@@ -382,7 +382,7 @@ async function applyExpression() {
 
 function applyZoom(factor, anchorX = overlayCanvas.clientWidth * 0.5, anchorY = overlayCanvas.clientHeight * 0.5) {
   const { width, height } = viewSize();
-  const aspect = Math.max(1, height / Math.max(width, 1));
+  const aspect = height / Math.max(width, 1);
   const nx = anchorX / width - 0.5;
   const ny = 0.5 - anchorY / height;
   const previousSpan = spanValue(state.view);
@@ -446,7 +446,7 @@ function bindCanvasInteractions() {
     interaction.moved = true;
     const { width, height } = viewSize();
     const span = spanValue(state.view);
-    const aspect = Math.max(1, height / Math.max(width, 1));
+    const aspect = height / Math.max(width, 1);
     addCenterDelta(state.view, -(dx / width) * span, (dy / height) * span * aspect);
     interaction.x = event.clientX;
     interaction.y = event.clientY;

@@ -1,11 +1,11 @@
 import { cAbs, cAdd, cDiv, cSub, complex, isFiniteComplex } from "./complex.js";
-import { evaluateExpression, toDsWgsl, toWgsl } from "./parser.js";
+import { evaluateExpression, toDsWgsl, toScaledWgsl, toWgsl } from "./parser.js";
 import { MAX_ROOTS } from "./root-finder.js";
 import { centerDifference, encodeScaledDoubleDouble } from "./view-center.js";
 import { encodeSpan, spanLog2, spanValue } from "./view-scale.js";
 
 const MAX_CONSTANTS = 32;
-const MAX_ITERATIONS = 512;
+const MAX_ITERATIONS = 1024;
 const BASE_UNIFORM_FLOATS = 24 + MAX_CONSTANTS + MAX_CONSTANTS + MAX_ROOTS * 8;
 const REFERENCE_OFFSET = BASE_UNIFORM_FLOATS;
 const JACOBIAN_OFFSET = REFERENCE_OFFSET + (MAX_ITERATIONS + 1) * 4;
@@ -53,8 +53,12 @@ fn c_mul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
 }
 
 fn c_div(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
-  let denominator = max(dot(b, b), 1e-30);
-  return vec2<f32>((a.x * b.x + a.y * b.y) / denominator, (a.y * b.x - a.x * b.y) / denominator);
+  let scale = max(abs(b.x), abs(b.y));
+  if (scale == 0.0) { return vec2<f32>(0.0, 0.0); }
+  let normalized = b / scale;
+  let numerator = a / scale;
+  let denominator = dot(normalized, normalized);
+  return vec2<f32>((numerator.x * normalized.x + numerator.y * normalized.y) / denominator, (numerator.y * normalized.x - numerator.x * normalized.y) / denominator);
 }
 
 fn c_abs(a: vec2<f32>) -> vec2<f32> {
@@ -183,10 +187,10 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
       break;
     }
     let derivative = evaluate_derivative(z);
-    if (length(derivative) < 1e-7) { break; }
+    if (length(derivative) == 0.0) { break; }
     let step = c_div(value, derivative);
     let next = z - step;
-    if (!(length(next) <= 1e8)) { break; }
+    if (!(length(next) <= 1e30)) { break; }
     z = next;
   }
 
@@ -416,11 +420,47 @@ fn sc_from_vec(value: vec2<f32>, exponent: f32) -> ScaledComplex {
   return sc_normalize(value, exponent);
 }
 
+fn sc_zero() -> ScaledComplex {
+  return sc_complex(vec2<f32>(0.0), 0.0);
+}
+
+fn sc_neg(a: ScaledComplex) -> ScaledComplex {
+  return sc_complex(-a.value, a.exponent);
+}
+
+fn sc_real(value: f32) -> ScaledComplex {
+  return sc_from_vec(vec2<f32>(value, 0.0), 0.0);
+}
+
+fn sc_from_ds(value: DsComplex) -> ScaledComplex {
+  return sc_from_vec(value.hi + value.lo, 0.0);
+}
+
 fn sc_add(a: ScaledComplex, b: ScaledComplex) -> ScaledComplex {
+  if (length(a.value) == 0.0) { return b; }
+  if (length(b.value) == 0.0) { return a; }
   let exponent = max(a.exponent, b.exponent);
   let aScale = exp2(a.exponent - exponent);
   let bScale = exp2(b.exponent - exponent);
   return sc_normalize(a.value * aScale + b.value * bScale, exponent);
+}
+
+fn sc_sub(a: ScaledComplex, b: ScaledComplex) -> ScaledComplex {
+  if (length(a.value) == 0.0) { return sc_neg(b); }
+  if (length(b.value) == 0.0) { return a; }
+  let exponent = max(a.exponent, b.exponent);
+  let aScale = exp2(a.exponent - exponent);
+  let bScale = exp2(b.exponent - exponent);
+  return sc_normalize(a.value * aScale - b.value * bScale, exponent);
+}
+
+fn sc_mul(a: ScaledComplex, b: ScaledComplex) -> ScaledComplex {
+  return sc_normalize(c_mul(a.value, b.value), a.exponent + b.exponent);
+}
+
+fn sc_div(a: ScaledComplex, b: ScaledComplex) -> ScaledComplex {
+  if (length(b.value) == 0.0) { return sc_zero(); }
+  return sc_normalize(c_div(a.value, b.value), a.exponent - b.exponent);
 }
 
 fn sc_mul_vec(a: ScaledComplex, b: vec2<f32>) -> ScaledComplex {
@@ -428,11 +468,11 @@ fn sc_mul_vec(a: ScaledComplex, b: vec2<f32>) -> ScaledComplex {
 }
 
 fn sc_mul_ds(a: ScaledComplex, b: DsComplex) -> ScaledComplex {
-  return sc_mul_vec(a, b.hi + b.lo);
+  return sc_mul(a, sc_from_ds(b));
 }
 
 fn sc_square(a: ScaledComplex) -> ScaledComplex {
-  return sc_normalize(c_mul(a.value, a.value), a.exponent * 2.0);
+  return sc_mul(a, a);
 }
 
 fn sc_half(a: ScaledComplex) -> ScaledComplex {
@@ -445,14 +485,62 @@ fn sc_log2_length(a: ScaledComplex) -> f32 {
   return log2(magnitude) + a.exponent;
 }
 
-fn sc_to_ds(a: ScaledComplex) -> DsComplex {
+fn sc_to_vec(a: ScaledComplex) -> vec2<f32> {
   let safeExponent = clamp(a.exponent, -126.0, 127.0);
+  return a.value * exp2(safeExponent);
+}
+
+fn sc_log(a: ScaledComplex) -> ScaledComplex {
+  let magnitude = length(a.value);
+  if (magnitude == 0.0) { return sc_real(-1e30); }
+  return sc_from_vec(vec2<f32>(log(magnitude) + a.exponent * 0.6931471805599453, atan2(a.value.y, a.value.x)), 0.0);
+}
+
+fn sc_exp(a: ScaledComplex) -> ScaledComplex {
+  let input = sc_to_vec(a);
+  let exponent = input.x * 1.4426950408889634;
+  return sc_normalize(vec2<f32>(cos(input.y), sin(input.y)), exponent);
+}
+
+fn sc_sin(a: ScaledComplex) -> ScaledComplex {
+  if (sc_log2_length(a) < -12.0) { return a; }
+  return sc_from_vec(c_sin(sc_to_vec(a)), 0.0);
+}
+
+fn sc_cos(a: ScaledComplex) -> ScaledComplex {
+  if (sc_log2_length(a) < -12.0) { return sc_sub(sc_real(1.0), sc_half(sc_square(a))); }
+  return sc_from_vec(c_cos(sc_to_vec(a)), 0.0);
+}
+
+fn sc_tan(a: ScaledComplex) -> ScaledComplex {
+  return sc_div(sc_sin(a), sc_cos(a));
+}
+
+fn sc_sqrt(a: ScaledComplex) -> ScaledComplex {
+  return sc_normalize(c_sqrt(a.value), a.exponent * 0.5);
+}
+
+fn sc_abs(a: ScaledComplex) -> ScaledComplex {
+  let magnitude = sc_log2_length(a);
+  if (magnitude < -1e29) { return sc_zero(); }
+  return sc_complex(vec2<f32>(1.0, 0.0), magnitude);
+}
+
+fn sc_pow(a: ScaledComplex, b: ScaledComplex) -> ScaledComplex {
+  if (sc_log2_length(a) < -1e29) { return sc_zero(); }
+  return sc_exp(sc_mul(b, sc_log(a)));
+}
+
+fn sc_to_ds(a: ScaledComplex) -> DsComplex {
+  if (a.exponent < -149.0) { return ds_from_vec(vec2<f32>(0.0)); }
+  let safeExponent = min(a.exponent, 127.0);
   return ds_from_vec(a.value * exp2(safeExponent));
 }
 `;
 
 function buildDeepShader(expression, constantNames) {
   const generated = toDsWgsl(expression.ast, constantNames);
+  const scaled = toScaledWgsl(expression.ast, constantNames);
   return `${shaderPrelude}
 ${doubleSinglePrelude}
 fn evaluate_value_ds(z: DsComplex) -> DsComplex {
@@ -461,6 +549,14 @@ fn evaluate_value_ds(z: DsComplex) -> DsComplex {
 
 fn evaluate_derivative_ds(z: DsComplex) -> DsComplex {
   return ${generated.derivative};
+}
+
+fn evaluate_value_scaled(scaledZ: ScaledComplex) -> ScaledComplex {
+  return ${scaled.value};
+}
+
+fn evaluate_derivative_scaled(scaledZ: ScaledComplex) -> ScaledComplex {
+  return ${scaled.derivative};
 }
 
 @fragment
@@ -474,26 +570,40 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     vec2<f32>(uniforms.origin.x, uniforms.origin.z),
     vec2<f32>(uniforms.origin.y, uniforms.origin.w)
   );
-  var offset = sc_add(
-    sc_from_vec(uniforms.centerOffset.xy, uniforms.centerOffset.z),
-    sc_from_vec(initialOffset, uniforms.view.z)
-  );
+  var centerOffsetScaled = sc_from_vec(uniforms.centerOffset.xy, uniforms.centerOffset.z);
+  var pixelOffsetScaled = sc_from_vec(initialOffset, uniforms.view.z);
+  var offset = sc_add(centerOffsetScaled, pixelOffsetScaled);
   var z = ds_add(referenceStart, sc_to_ds(offset));
+  var scaledZ = sc_add(sc_from_ds(referenceStart), offset);
+  var scaledMode = uniforms.render.z > 0.5;
   var directMode = false;
   var converged = false;
   var iterations = 0.0;
+  let toleranceLog2 = log2(max(uniforms.viewport.w, 1e-30));
 
   for (var iteration = 0u; iteration < ${MAX_ITERATIONS}u; iteration = iteration + 1u) {
-    if (f32(iteration) >= uniforms.viewport.z) { break; }
+    if (!scaledMode && f32(iteration) >= uniforms.viewport.z) { break; }
     iterations = f32(iteration);
-    if (directMode) {
+    if (scaledMode) {
+      let value = evaluate_value_scaled(scaledZ);
+      if (sc_log2_length(value) <= toleranceLog2) {
+        converged = true;
+        break;
+      }
+      let derivative = evaluate_derivative_scaled(scaledZ);
+      if (sc_log2_length(derivative) <= -1e29) { break; }
+      let next = sc_sub(scaledZ, sc_div(value, derivative));
+      if (!(sc_log2_length(next) <= 1000000.0)) { break; }
+      scaledZ = next;
+      z = sc_to_ds(scaledZ);
+    } else if (directMode) {
       let value = evaluate_value_ds(z);
       if (ds_length(value) <= uniforms.viewport.w) {
         converged = true;
         break;
       }
       let derivative = evaluate_derivative_ds(z);
-      if (ds_length(derivative) < 1e-7) { break; }
+      if (ds_length(derivative) == 0.0) { break; }
       let next = ds_sub(z, ds_div(value, derivative));
       if (!(ds_length(next) <= 1e8)) { break; }
       z = next;
@@ -562,12 +672,14 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
 
 function boundsForView(view, width, height) {
   const spanX = spanValue(view);
-  const spanY = spanX * Math.max(1, height / Math.max(width, 1));
+  const spanY = spanX * height / Math.max(width, 1);
+  const centerX = view.centerX + (Number.isFinite(view.centerXLow) ? view.centerXLow : 0);
+  const centerY = view.centerY + (Number.isFinite(view.centerYLow) ? view.centerYLow : 0);
   return [
-    view.centerX - spanX * 0.5,
-    view.centerY - spanY * 0.5,
-    view.centerX + spanX * 0.5,
-    view.centerY + spanY * 0.5,
+    centerX - spanX * 0.5,
+    centerY - spanY * 0.5,
+    centerX + spanX * 0.5,
+    centerY + spanY * 0.5,
   ];
 }
 
@@ -600,6 +712,7 @@ function buildReferenceOrbit(state, referenceCenter) {
   const curvature = new Float32Array(MAX_ITERATIONS * 4);
   let z = complex(referenceCenter.x, referenceCenter.y);
   let stopped = false;
+  let valid = true;
 
   for (let iteration = 0; iteration <= MAX_ITERATIONS; iteration += 1) {
     writeSplitComplex(reference, iteration * 4, z);
@@ -608,6 +721,7 @@ function buildReferenceOrbit(state, referenceCenter) {
 
     const next = newtonMap(state.expression, z, state.constants);
     if (!next) {
+      valid = false;
       stopped = true;
       continue;
     }
@@ -622,11 +736,13 @@ function buildReferenceOrbit(state, referenceCenter) {
       const second = cDiv(secondNumerator, complex(stepSize * stepSize, 0));
       writeSplitComplex(jacobian, iteration * 4, first);
       writeSplitComplex(curvature, iteration * 4, second);
+    } else {
+      valid = false;
     }
     z = next;
   }
 
-  return { reference, jacobian, curvature };
+  return { reference, jacobian, curvature, valid };
 }
 
 function referenceKey(state, referenceCenter) {
@@ -794,7 +910,7 @@ export class GpuRenderer {
     const bounds = boundsForView(state.view, width, height);
     const spanScale = encodeSpan(state.view, height / Math.max(width, 1));
     const spanX = spanValue(state.view);
-    const spanY = spanX * Math.max(1, height / Math.max(width, 1));
+    const spanY = spanX * height / Math.max(width, 1);
     let originCenter = { x: state.view.centerX, y: state.view.centerY };
     let centerOffset = { real: 0, imaginary: 0, exponent: 0 };
     if (detail) {
@@ -848,6 +964,7 @@ export class GpuRenderer {
       uniforms.set(this.referenceCache.reference, REFERENCE_OFFSET);
       uniforms.set(this.referenceCache.jacobian, JACOBIAN_OFFSET);
       uniforms.set(this.referenceCache.curvature, CURVATURE_OFFSET);
+      uniforms[10] = this.referenceCache.valid ? 0 : 1;
     }
     this.device.queue.writeBuffer(this.uniformBuffer, 0, uniforms);
 

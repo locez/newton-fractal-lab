@@ -455,6 +455,94 @@ function emitDsWgsl(node, constants, mode = "value") {
   return "ds_real(0.0, 0.0)";
 }
 
+function emitScaledReal(value) {
+  return `sc_real(${numberForWgsl(value)})`;
+}
+
+function emitScaledConstant(name, constants) {
+  if (name === "pi") return emitScaledReal(Math.PI);
+  if (name === "e") return emitScaledReal(Math.E);
+  const index = constants.indexOf(name);
+  const component = ["x", "y", "z", "w"][index % 4];
+  const slot = Math.floor(index / 4);
+  return `sc_from_ds(ds_real(uniforms.constants[${slot}].${component}, uniforms.constantLow[${slot}].${component}))`;
+}
+
+function emitScaledIntegerPower(node, exponent, constants) {
+  const base = emitScaledWgsl(node, constants, "value");
+  const magnitude = Math.abs(exponent);
+  if (!Number.isInteger(exponent) || magnitude > 16) return null;
+  if (exponent === 0) return "sc_real(1.0)";
+  let result = base;
+  for (let index = 1; index < magnitude; index += 1) {
+    result = `sc_mul(${result}, ${base})`;
+  }
+  return exponent > 0 ? result : `sc_div(sc_real(1.0), ${result})`;
+}
+
+function emitScaledWgsl(node, constants, mode = "value") {
+  if (node.type === "number") return mode === "value" ? emitScaledReal(node.value) : "sc_zero()";
+  if (node.type === "variable") return mode === "value" ? "scaledZ" : "sc_real(1.0)";
+  if (node.type === "constant") return mode === "value" ? emitScaledConstant(node.name, constants) : "sc_zero()";
+  if (node.type === "unary") {
+    return mode === "value"
+      ? `sc_neg(${emitScaledWgsl(node.argument, constants, "value")})`
+      : `sc_neg(${emitScaledWgsl(node.argument, constants, "derivative")})`;
+  }
+  if (node.type === "binary") {
+    const left = emitScaledWgsl(node.left, constants, "value");
+    const right = emitScaledWgsl(node.right, constants, "value");
+    const leftDerivative = emitScaledWgsl(node.left, constants, "derivative");
+    const rightDerivative = emitScaledWgsl(node.right, constants, "derivative");
+    if (mode === "value") {
+      if (node.operator === "^" && node.right.type === "number") {
+        const integerPower = emitScaledIntegerPower(node.left, node.right.value, constants);
+        if (integerPower) return integerPower;
+      }
+      const fn = { "+": "sc_add", "-": "sc_sub", "*": "sc_mul", "/": "sc_div", "^": "sc_pow" }[node.operator];
+      return `${fn}(${left}, ${right})`;
+    }
+    if (node.operator === "+") return rightDerivative === "sc_zero()" ? leftDerivative : `sc_add(${leftDerivative}, ${rightDerivative})`;
+    if (node.operator === "-") return rightDerivative === "sc_zero()" ? leftDerivative : `sc_sub(${leftDerivative}, ${rightDerivative})`;
+    if (node.operator === "*") return `sc_add(sc_mul(${leftDerivative}, ${right}), sc_mul(${left}, ${rightDerivative}))`;
+    if (node.operator === "/") {
+      return `sc_div(sc_sub(sc_mul(${leftDerivative}, ${right}), sc_mul(${left}, ${rightDerivative})), sc_mul(${right}, ${right}))`;
+    }
+    if (node.right.type === "number") {
+      const exponent = node.right.value;
+      const reducedPower = emitScaledIntegerPower(node.left, exponent - 1, constants);
+      if (reducedPower) {
+        const factor = `sc_mul(sc_real(${numberForWgsl(exponent)}), ${reducedPower})`;
+        return leftDerivative === "sc_real(1.0)" ? factor : `sc_mul(${factor}, ${leftDerivative})`;
+      }
+    }
+    return `sc_mul(sc_pow(${left}, ${right}), sc_add(sc_mul(${rightDerivative}, sc_log(${left})), sc_mul(${right}, sc_div(${leftDerivative}, ${left}))))`;
+  }
+  if (node.type === "call") {
+    const argument = emitScaledWgsl(node.argument, constants, "value");
+    const derivative = emitScaledWgsl(node.argument, constants, "derivative");
+    const functionName = {
+      sin: "sc_sin",
+      cos: "sc_cos",
+      tan: "sc_tan",
+      ln: "sc_log",
+      log: "sc_log",
+      exp: "sc_exp",
+      sqrt: "sc_sqrt",
+      abs: "sc_abs",
+    }[node.name];
+    if (mode === "value") return `${functionName}(${argument})`;
+    if (node.name === "sin") return `sc_mul(sc_cos(${argument}), ${derivative})`;
+    if (node.name === "cos") return `sc_mul(sc_neg(sc_sin(${argument})), ${derivative})`;
+    if (node.name === "tan") return `sc_mul(sc_div(sc_real(1.0), sc_mul(sc_cos(${argument}), sc_cos(${argument}))), ${derivative})`;
+    if (node.name === "ln" || node.name === "log") return `sc_mul(sc_div(sc_real(1.0), ${argument}), ${derivative})`;
+    if (node.name === "exp") return `sc_mul(sc_exp(${argument}), ${derivative})`;
+    if (node.name === "sqrt") return `sc_mul(sc_div(sc_real(0.5), sc_sqrt(${argument})), ${derivative})`;
+    return "sc_zero()";
+  }
+  return "sc_zero()";
+}
+
 export function parseExpression(source) {
   const trimmed = String(source || "").trim();
   const ast = new Parser(trimmed).parse();
@@ -482,5 +570,12 @@ export function toDsWgsl(ast, constants = []) {
   return {
     value: emitDsWgsl(ast, constants, "value"),
     derivative: emitDsWgsl(ast, constants, "derivative"),
+  };
+}
+
+export function toScaledWgsl(ast, constants = []) {
+  return {
+    value: emitScaledWgsl(ast, constants, "value"),
+    derivative: emitScaledWgsl(ast, constants, "derivative"),
   };
 }
