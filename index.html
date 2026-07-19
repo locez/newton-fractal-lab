@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#080b10" />
+    <meta name="description" content="An interactive WebGPU Newton fractal laboratory." />
+    <title>Luna Newton Lab</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="lab-shell">
+      <div class="scene-grid" aria-hidden="true"></div>
+      <canvas id="fractal-canvas" aria-label="Newton fractal visualization"></canvas>
+      <canvas id="cpu-canvas" class="is-hidden" aria-hidden="true"></canvas>
+      <canvas id="overlay-canvas" aria-hidden="true"></canvas>
+
+      <header class="topbar">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">L</span>
+          <div>
+            <p class="eyebrow">LUNA / NEWTON LAB</p>
+            <h1>Convergence field</h1>
+          </div>
+        </div>
+        <div class="topbar-readout">
+          <span class="readout-label">ENGINE</span>
+          <span id="engine-status" class="engine-status is-pending">STARTING</span>
+        </div>
+      </header>
+
+      <section id="support-banner" class="support-banner is-hidden" role="status" aria-live="polite">
+        <span class="banner-dot" aria-hidden="true"></span>
+        <div>
+          <strong id="support-title">WebGPU unavailable</strong>
+          <p id="support-copy">CPU preview active. Use a current Chrome or Edge build, or lower iterations for a faster render.</p>
+        </div>
+        <button id="dismiss-support" class="icon-button banner-dismiss" type="button" aria-label="Dismiss support notice" title="Dismiss notice">x</button>
+      </section>
+
+      <aside id="control-panel" class="control-panel" aria-label="Newton Lab controls">
+        <div id="panel-header" class="panel-header">
+          <div>
+            <span class="panel-kicker">CONTROL DECK</span>
+            <h2>Field parameters</h2>
+          </div>
+          <div class="panel-actions">
+            <button id="collapse-panel" class="icon-button" type="button" aria-label="Minimize controls" title="Minimize controls">-</button>
+          </div>
+        </div>
+
+        <div id="panel-body" class="panel-body">
+          <section class="control-section expression-section">
+            <div class="section-heading">
+              <div>
+                <span class="section-index">01</span>
+                <h3>Expression</h3>
+              </div>
+              <span id="expression-state" class="state-chip">APPLIED</span>
+            </div>
+            <label class="sr-only" for="expression-input">Mathematical expression</label>
+            <div class="expression-row">
+              <input id="expression-input" class="expression-input" type="text" spellcheck="false" value="z^3 - a" autocomplete="off" />
+              <button id="apply-expression" class="apply-button" type="button">Apply</button>
+            </div>
+            <div class="expression-meta">
+              <span id="expression-summary">z^3 - a</span>
+              <span id="variable-summary">variable: z</span>
+            </div>
+            <p id="expression-error" class="inline-message is-hidden" role="alert"></p>
+          </section>
+
+          <section class="control-section">
+            <div class="section-heading">
+              <div>
+                <span class="section-index">02</span>
+                <h3>Constants</h3>
+              </div>
+              <span id="constant-count" class="muted-count">01 LIVE</span>
+            </div>
+            <div id="constants-list" class="constants-list"></div>
+            <p id="constants-empty" class="empty-state is-hidden">No user constants in the applied expression.</p>
+          </section>
+
+          <section class="control-section">
+            <div class="section-heading">
+              <div>
+                <span class="section-index">03</span>
+                <h3>View</h3>
+              </div>
+              <span id="zoom-readout" class="muted-count">100%</span>
+            </div>
+            <div class="view-actions">
+              <button id="zoom-out" class="square-button" type="button" aria-label="Zoom out" title="Zoom out">-</button>
+              <button id="reset-view" class="reset-button" type="button"><span aria-hidden="true">&#8634;</span> Reset view</button>
+              <button id="zoom-in" class="square-button" type="button" aria-label="Zoom in" title="Zoom in">+</button>
+            </div>
+            <div class="coordinate-readout">
+              <span>center</span>
+              <strong id="center-readout">0.0000 + 0.0000i</strong>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <div class="section-heading">
+              <div>
+                <span class="section-index">04</span>
+                <h3>Overlays</h3>
+              </div>
+              <span class="muted-count">LAYER MIX</span>
+            </div>
+            <div class="toggle-list">
+              <label class="toggle-row">
+                <span><span class="toggle-swatch axis-swatch"></span>Origin axes</span>
+                <input id="toggle-axes" type="checkbox" checked />
+              </label>
+              <label class="toggle-row">
+                <span><span class="toggle-swatch border-swatch"></span>Frame axes</span>
+                <input id="toggle-border" type="checkbox" checked />
+              </label>
+              <label class="toggle-row">
+                <span><span class="toggle-swatch grid-swatch"></span>Grid lines</span>
+                <input id="toggle-grid" type="checkbox" />
+              </label>
+              <label class="toggle-row">
+                <span><span class="toggle-swatch root-swatch"></span>Root positions</span>
+                <input id="toggle-roots" type="checkbox" checked />
+              </label>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <div class="section-heading">
+              <div>
+                <span class="section-index">05</span>
+                <h3>Palette</h3>
+              </div>
+              <span id="root-readout" class="muted-count">0 ROOTS</span>
+            </div>
+            <label class="select-wrap" for="palette-select">
+              <select id="palette-select" class="palette-select">
+                <option value="0">Viridis / 01</option>
+                <option value="1">Plasma / 02</option>
+                <option value="2">Magma / 03</option>
+                <option value="3">Inferno / 04</option>
+                <option value="4">Cividis / 05</option>
+                <option value="5">Turbo / 06</option>
+                <option value="6">Rainbow / 07</option>
+                <option value="7">Jet / 08</option>
+                <option value="8">Coolwarm / 09</option>
+                <option value="9">Spectral / 10</option>
+              </select>
+              <span class="select-arrow" aria-hidden="true">&#8595;</span>
+            </label>
+            <div id="palette-swatches" class="palette-swatches" aria-hidden="true"></div>
+          </section>
+
+          <section class="control-section compact-section">
+            <div class="section-heading">
+              <div>
+                <span class="section-index">06</span>
+                <h3>Solver</h3>
+              </div>
+              <span id="iteration-readout" class="muted-count">160 ITER</span>
+            </div>
+            <label class="range-control" for="iteration-range">
+              <span>Iterations</span>
+              <input id="iteration-range" type="range" min="32" max="512" step="8" value="160" />
+            </label>
+            <label class="range-control" for="opacity-range">
+              <span>Panel opacity</span>
+              <input id="opacity-range" type="range" min="0.56" max="1" step="0.02" value="0.92" />
+            </label>
+          </section>
+
+          <footer class="panel-footer">
+            <span class="footer-led" aria-hidden="true"></span>
+            <span>PANEL / FREE</span>
+            <span id="render-time">-- ms</span>
+          </footer>
+        </div>
+      </aside>
+
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      <div class="corner-mark corner-mark-left" aria-hidden="true">N / 01</div>
+      <div class="corner-mark corner-mark-right" aria-hidden="true">RENDER / LIVE</div>
+    </main>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
