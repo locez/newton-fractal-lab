@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { cAbs } from "../src/complex.js";
+import { buildShader } from "../src/gpu-renderer.js";
 import { evaluateExpression, ExpressionError, parseExpression, toWgsl } from "../src/parser.js";
 import { findRoots } from "../src/root-finder.js";
 
@@ -52,4 +53,12 @@ test("finds the three roots of z^3 - 1 in the default view", () => {
     const value = evaluateExpression(expression.ast, [root.re, root.im], {});
     assert.ok(cAbs(value.value) < 0.01);
   });
+});
+
+test("keeps generated WGSL compatible with browser shader parsers", () => {
+  const expression = parseExpression("z^3 - a");
+  const shader = buildShader(expression, expression.constants);
+  assert.doesNotMatch(shader, /isNan/);
+  assert.doesNotMatch(shader, /if \(palette == [678]\) return/);
+  assert.match(shader, /let next = z - step/);
 });

@@ -110,9 +110,15 @@ fn palette_color(palette: i32, t: f32) -> vec3<f32> {
   if (palette == 5) {
     return ramp(vec3<f32>(0.188, 0.071, 0.231), vec3<f32>(0.275, 0.420, 0.890), vec3<f32>(0.106, 0.812, 0.831), vec3<f32>(0.659, 0.925, 0.196), vec3<f32>(0.973, 0.125, 0.090), t);
   }
-  if (palette == 6) return hsv(t, 0.78, 0.94);
-  if (palette == 7) return ramp(vec3<f32>(0.0, 0.0, 0.498), vec3<f32>(0.0, 0.498, 1.0), vec3<f32>(0.498, 1.0, 0.498), vec3<f32>(1.0, 0.498, 0.0), vec3<f32>(0.498, 0.0, 0.0), t);
-  if (palette == 8) return ramp(vec3<f32>(0.231, 0.298, 0.753), vec3<f32>(0.553, 0.690, 0.996), vec3<f32>(0.867, 0.867, 0.867), vec3<f32>(0.957, 0.596, 0.478), vec3<f32>(0.706, 0.016, 0.102), t);
+  if (palette == 6) {
+    return hsv(t, 0.78, 0.94);
+  }
+  if (palette == 7) {
+    return ramp(vec3<f32>(0.0, 0.0, 0.498), vec3<f32>(0.0, 0.498, 1.0), vec3<f32>(0.498, 1.0, 0.498), vec3<f32>(1.0, 0.498, 0.0), vec3<f32>(0.498, 0.0, 0.0), t);
+  }
+  if (palette == 8) {
+    return ramp(vec3<f32>(0.231, 0.298, 0.753), vec3<f32>(0.553, 0.690, 0.996), vec3<f32>(0.867, 0.867, 0.867), vec3<f32>(0.957, 0.596, 0.478), vec3<f32>(0.706, 0.016, 0.102), t);
+  }
   return ramp(vec3<f32>(0.196, 0.533, 0.741), vec3<f32>(0.600, 0.835, 0.580), vec3<f32>(0.902, 0.961, 0.596), vec3<f32>(0.996, 0.878, 0.545), vec3<f32>(0.835, 0.243, 0.310), t);
 }
 
@@ -164,8 +170,9 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     let derivative = evaluate_derivative(z);
     if (length(derivative) < 1e-7) { break; }
     let step = c_div(value, derivative);
-    z = z - step;
-    if (length(z) > 1e8 || any(isNan(z))) { break; }
+    let next = z - step;
+    if (!(length(next) <= 1e8)) { break; }
+    z = next;
   }
 
   var rootIndex = -1;
