@@ -1,9 +1,10 @@
 import { cAbs, cDiv, cSub, complex, isFiniteComplex } from "./complex.js";
 import { evaluateExpression } from "./parser.js";
 import { basinColor, rgbCss } from "./palettes.js";
+import { spanValue } from "./view-scale.js";
 
 function boundsForView(view, width, height) {
-  const spanX = Math.max(view.span, 1e-18);
+  const spanX = spanValue(view);
   const spanY = spanX * Math.max(1, height / Math.max(width, 1));
   return {
     minX: view.centerX - spanX * 0.5,

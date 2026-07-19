@@ -5,6 +5,7 @@ import { findRoots } from "./root-finder.js";
 import { PALETTES } from "./palettes.js";
 import { drawOverlay, formatComplexPoint, screenToWorld } from "./overlay.js";
 import { needsPrecisionDetail } from "./view-precision.js";
+import { setSpanLog2, spanLog2, spanValue } from "./view-scale.js";
 
 const fractalCanvas = document.querySelector("#fractal-canvas");
 const cpuCanvas = document.querySelector("#cpu-canvas");
@@ -43,8 +44,8 @@ const state = {
   expression: initialExpression,
   constants: { a: 1 },
   ranges: { a: { min: -2, max: 2, step: 0.01 } },
-  view: { centerX: 0, centerY: 0, span: 6 },
-  initialSpan: 6,
+  view: { centerX: 0, centerY: 0, span: 6, spanLog2: Math.log2(6) },
+  initialSpanLog2: Math.log2(6),
   iterations: 160,
   tolerance: 0.0001,
   paletteIndex: 0,
@@ -103,8 +104,15 @@ function viewSize() {
 }
 
 function updateViewReadouts() {
-  const zoom = Math.round((state.initialSpan / state.view.span) * 100);
-  zoomReadout.textContent = `${zoom >= 1000 ? `${(zoom / 1000).toFixed(1)}k` : zoom}%`;
+  const zoomLog10 = (state.initialSpanLog2 - spanLog2(state.view)) * Math.LOG10E * Math.LN2;
+  const percentLog10 = zoomLog10 + 2;
+  if (percentLog10 < 6) {
+    zoomReadout.textContent = `${Math.round(10 ** percentLog10)}%`;
+  } else if (percentLog10 < 12) {
+    zoomReadout.textContent = `${(10 ** (percentLog10 - 3)).toPrecision(5)}k%`;
+  } else {
+    zoomReadout.textContent = `10^${percentLog10.toFixed(1)}%`;
+  }
   centerReadout.textContent = formatComplexPoint({ re: state.view.centerX, im: state.view.centerY });
 }
 
@@ -374,10 +382,10 @@ async function applyExpression() {
 function applyZoom(factor, anchorX = overlayCanvas.clientWidth * 0.5, anchorY = overlayCanvas.clientHeight * 0.5) {
   const { width, height } = viewSize();
   const before = screenToWorld(state.view, anchorX, anchorY, width, height);
-  const nextSpan = clamp(state.view.span * factor, 1e-12, 1e8);
+  setSpanLog2(state.view, spanLog2(state.view) + Math.log2(factor));
+  const nextSpan = spanValue(state.view);
   const nx = anchorX / width - 0.5;
   const ny = 0.5 - anchorY / height;
-  state.view.span = nextSpan;
   const nextSpanY = nextSpan * height / width;
   state.view.centerX = before.re - nx * nextSpan;
   state.view.centerY = before.im - ny * nextSpanY;
@@ -389,7 +397,7 @@ function applyZoom(factor, anchorX = overlayCanvas.clientWidth * 0.5, anchorY = 
 function resetView() {
   state.view.centerX = 0;
   state.view.centerY = 0;
-  state.view.span = state.initialSpan;
+  setSpanLog2(state.view, state.initialSpanLog2);
   updateViewReadouts();
   updateRoots();
   scheduleRender();
@@ -434,8 +442,9 @@ function bindCanvasInteractions() {
     if (Math.abs(dx) + Math.abs(dy) < 1) return;
     interaction.moved = true;
     const { width, height } = viewSize();
-    state.view.centerX -= (dx / width) * state.view.span;
-    state.view.centerY += (dy / height) * state.view.span * height / width;
+    const span = spanValue(state.view);
+    state.view.centerX -= (dx / width) * span;
+    state.view.centerY += (dy / height) * span * height / width;
     interaction.x = event.clientX;
     interaction.y = event.clientY;
     updateViewReadouts();

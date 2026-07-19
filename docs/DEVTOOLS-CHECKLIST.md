@@ -15,6 +15,7 @@ Use a current Microsoft Edge build over `http://127.0.0.1:4173` after `npm run d
 - [ ] Switch through all ten palettes; colors and root markers update.
 - [ ] Use wheel zoom at the center and off-center; the cursor location stays anchored. Use `+`, `-`, and Reset.
 - [ ] Pan to a nonzero center and zoom until the status reads `GPU REBASE`; inspect a translated Newton boundary and confirm the GPU recomputes distinct basins instead of enlarging a stale frame. Zoom out and confirm `WEBGPU ACTIVE` returns.
+- [ ] Continue centered zoom past the JavaScript number range; confirm the scale readout keeps changing, `GPU REBASE` remains active, and the image does not become a blown-up stale frame. Treat the finite GPU exponent/iteration range as the hardware boundary rather than expecting literal infinity.
 - [ ] Drag the canvas to pan; coordinate readouts and tick labels update.
 - [ ] Collapse and restore the control deck, drag its header, and change panel opacity.
 

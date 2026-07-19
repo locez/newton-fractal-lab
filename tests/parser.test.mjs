@@ -5,6 +5,7 @@ import { buildDeepShader, buildShader } from "../src/gpu-renderer.js";
 import { evaluateExpression, ExpressionError, parseExpression, toDsWgsl, toWgsl } from "../src/parser.js";
 import { findRoots } from "../src/root-finder.js";
 import { needsPrecisionDetail } from "../src/view-precision.js";
+import { encodeSpan, setSpanLog2, spanLog2, spanValue } from "../src/view-scale.js";
 
 test("parses implicit multiplication, pi, and supported functions", () => {
   const expression = parseExpression("2sin(pi / 2) + 3z");
@@ -80,4 +81,13 @@ test("enters GPU precision detail before nonzero f32 pixels collapse", () => {
   assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 6 }, 1440), false);
   assert.equal(needsPrecisionDetail({ centerX: 1, centerY: 0, span: 1e-7 }, 1440), true);
   assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-12 }, 1440), false);
+  assert.equal(needsPrecisionDetail({ centerX: 0, centerY: 0, span: 1e-40 }, 1440), true);
+});
+
+test("keeps GPU scale exponents after JavaScript numbers underflow", () => {
+  const view = { centerX: 1.25, centerY: -0.5, span: 6 };
+  setSpanLog2(view, -2000);
+  assert.equal(spanLog2(view), -2000);
+  assert.equal(spanValue(view), Number.MIN_VALUE);
+  assert.equal(encodeSpan(view).exponent, -2000);
 });

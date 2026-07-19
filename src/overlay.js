@@ -1,7 +1,8 @@
 import { PALETTES, rgbCss, samplePalette } from "./palettes.js";
+import { spanValue } from "./view-scale.js";
 
 function boundsForView(view, width, height) {
-  const spanX = Math.max(view.span, 1e-18);
+  const spanX = spanValue(view);
   const spanY = spanX * Math.max(1, height / Math.max(width, 1));
   return {
     minX: view.centerX - spanX * 0.5,
@@ -15,15 +16,17 @@ function boundsForView(view, width, height) {
 
 function niceStep(span) {
   const raw = span / 7;
-  const exponent = Math.floor(Math.log10(Math.max(raw, 1e-18)));
+  if (!(raw > 0)) return Number.MIN_VALUE;
+  const exponent = Math.floor(Math.log10(raw));
   const magnitude = 10 ** exponent;
+  if (!(magnitude > 0) || !Number.isFinite(magnitude)) return Number.MIN_VALUE;
   const normalized = raw / magnitude;
   const factor = normalized < 1.5 ? 1 : normalized < 3.5 ? 2 : normalized < 7.5 ? 5 : 10;
-  return factor * magnitude;
+  return Math.max(factor * magnitude, Number.MIN_VALUE);
 }
 
 function formatTick(value) {
-  if (Math.abs(value) < 1e-12) return "0";
+  if (value === 0) return "0";
   const magnitude = Math.abs(value);
   if (magnitude >= 1000 || magnitude < 0.001) return value.toExponential(1).replace("e+", "e");
   if (magnitude >= 10) return value.toFixed(1);

@@ -11,7 +11,7 @@ Luna Newton Lab 是一个可交互探索牛顿分形的 Web 应用。它以 WebG
 - 自动生成用户常量滑块。支持自定义最小值、最大值和实时拖动更新。
 - 支持 `+ - * / ^`、隐式乘法，以及 `sin`、`cos`、`tan`、`ln`、`log`、`exp`、`sqrt`、`abs`、`pi`、`e` 和 `π`。
 - 根位置叠加、原点轴、边界轴和网格线可以独立组合。
-- 鼠标滚轮、按钮缩放和平移；视图范围使用数值保护，最小缩放跨度为 `1e-12`。深缩放会显示 `GPU REBASE`：以当前中心的参考轨道重新在 GPU 上计算，缩小后自动回到 `WEBGPU ACTIVE`，不把旧帧放大冒充重新渲染。
+- 鼠标滚轮、按钮缩放和平移；深缩放使用独立的二进制尺度指数和 GPU 局部扰动重算，不把 `Number.MIN_VALUE` 当作视图终点。深缩放会显示 `GPU REBASE`：以当前中心的参考轨道重新在 GPU 上计算，缩小后自动回到 `WEBGPU ACTIVE`，不把旧帧放大冒充重新渲染。数学上的无穷仍受浏览器有限浮点位宽和迭代次数限制。
 - 十种调色板：Viridis、Plasma、Magma、Inferno、Cividis、Turbo、Rainbow、Jet、Coolwarm、Spectral。
 - 设置面板可折叠、拖拽移动并调整透明度。
 
@@ -54,7 +54,7 @@ Luna Newton Lab is an interactive Newton fractal laboratory. Its primary rendere
 - User constants receive live sliders with editable minimum and maximum bounds.
 - Supports `+ - * / ^`, implicit multiplication, `sin`, `cos`, `tan`, `ln`, `log`, `exp`, `sqrt`, `abs`, `pi`, `e`, and `π`.
 - Root positions, origin axes, frame axes, and grid lines are independent overlay layers.
-- Mouse-wheel zoom, button zoom, and panning with a protected near-infinite range down to `1e-12`. Deep views show `GPU REBASE`: the current-center reference orbit is recomputed on the GPU, and zooming out returns to `WEBGPU ACTIVE` instead of upscaling an old frame.
+- Mouse-wheel zoom, button zoom, and panning use an independent binary scale exponent plus GPU local perturbations for effectively unbounded deep zoom; `Number.MIN_VALUE` is no longer the view endpoint. Deep views show `GPU REBASE`: the current-center reference orbit is recomputed on the GPU, and zooming out returns to `WEBGPU ACTIVE` instead of upscaling an old frame. Literal mathematical infinity remains bounded by finite browser float formats and iteration count.
 - Ten palettes: Viridis, Plasma, Magma, Inferno, Cividis, Turbo, Rainbow, Jet, Coolwarm, and Spectral.
 - The control deck can be collapsed, dragged, and made transparent.
 

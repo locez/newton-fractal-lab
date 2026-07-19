@@ -1,6 +1,7 @@
 import { cAbs, cAdd, cDiv, cSub, complex, isFiniteComplex } from "./complex.js";
 import { evaluateExpression, toDsWgsl, toWgsl } from "./parser.js";
 import { MAX_ROOTS } from "./root-finder.js";
+import { encodeSpan, spanValue } from "./view-scale.js";
 
 const MAX_CONSTANTS = 32;
 const MAX_ITERATIONS = 512;
@@ -389,6 +390,63 @@ fn ds_pow(a: DsComplex, b: DsComplex) -> DsComplex {
   let correction = c_add(c_mul(b.lo, logarithm), c_mul(b.hi, c_div(a.lo, a.hi)));
   return ds_complex(high, c_mul(high, correction));
 }
+
+struct ScaledComplex {
+  value: vec2<f32>,
+  exponent: f32,
+}
+
+fn sc_complex(value: vec2<f32>, exponent: f32) -> ScaledComplex {
+  var result: ScaledComplex;
+  result.value = value;
+  result.exponent = exponent;
+  return result;
+}
+
+fn sc_normalize(value: vec2<f32>, exponent: f32) -> ScaledComplex {
+  let magnitude = length(value);
+  if (magnitude == 0.0) { return sc_complex(vec2<f32>(0.0), 0.0); }
+  let adjustment = floor(log2(magnitude));
+  return sc_complex(value / exp2(adjustment), exponent + adjustment);
+}
+
+fn sc_from_vec(value: vec2<f32>, exponent: f32) -> ScaledComplex {
+  return sc_normalize(value, exponent);
+}
+
+fn sc_add(a: ScaledComplex, b: ScaledComplex) -> ScaledComplex {
+  let exponent = max(a.exponent, b.exponent);
+  let aScale = exp2(a.exponent - exponent);
+  let bScale = exp2(b.exponent - exponent);
+  return sc_normalize(a.value * aScale + b.value * bScale, exponent);
+}
+
+fn sc_mul_vec(a: ScaledComplex, b: vec2<f32>) -> ScaledComplex {
+  return sc_normalize(c_mul(a.value, b), a.exponent);
+}
+
+fn sc_mul_ds(a: ScaledComplex, b: DsComplex) -> ScaledComplex {
+  return sc_mul_vec(a, b.hi + b.lo);
+}
+
+fn sc_square(a: ScaledComplex) -> ScaledComplex {
+  return sc_normalize(c_mul(a.value, a.value), a.exponent * 2.0);
+}
+
+fn sc_half(a: ScaledComplex) -> ScaledComplex {
+  return sc_complex(a.value, a.exponent - 1.0);
+}
+
+fn sc_log2_length(a: ScaledComplex) -> f32 {
+  let magnitude = length(a.value);
+  if (magnitude == 0.0) { return -1e30; }
+  return log2(magnitude) + a.exponent;
+}
+
+fn sc_to_ds(a: ScaledComplex) -> DsComplex {
+  let safeExponent = clamp(a.exponent, -126.0, 127.0);
+  return ds_from_vec(a.value * exp2(safeExponent));
+}
 `;
 
 function buildDeepShader(expression, constantNames) {
@@ -406,7 +464,7 @@ fn evaluate_derivative_ds(z: DsComplex) -> DsComplex {
 @fragment
 fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
   let centered = position.xy - uniforms.viewport.xy * 0.5;
-  let delta = vec2<f32>(
+  let initialOffset = vec2<f32>(
     centered.x * uniforms.view.x / uniforms.viewport.x,
     -centered.y * uniforms.view.y / uniforms.viewport.y
   );
@@ -414,9 +472,8 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     vec2<f32>(uniforms.origin.x, uniforms.origin.z),
     vec2<f32>(uniforms.origin.y, uniforms.origin.w)
   );
-  var offset = ds_from_vec(delta);
-  var z = ds_add(referenceStart, offset);
-  let viewSpan = max(uniforms.view.x, uniforms.view.y);
+  var offset = sc_from_vec(initialOffset, uniforms.view.z);
+  var z = ds_add(referenceStart, sc_to_ds(offset));
   var directMode = false;
   var converged = false;
   var iterations = 0.0;
@@ -444,16 +501,16 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
         uniforms.curvature[iteration].xy,
         uniforms.curvature[iteration].zw
       );
-      let linear = ds_mul(jacobian, offset);
-      let quadratic = ds_mul(ds_real(0.5, 0.0), ds_mul(curvature, ds_mul(offset, offset)));
-      let nextOffset = ds_add(linear, quadratic);
+      let linear = sc_mul_ds(offset, jacobian);
+      let quadratic = sc_half(sc_mul_ds(sc_square(offset), curvature));
+      let nextOffset = sc_add(linear, quadratic);
       let nextReference = ds_complex(
         uniforms.reference[iteration + 1u].xy,
         uniforms.reference[iteration + 1u].zw
       );
-      let next = ds_add(nextReference, nextOffset);
+      let next = ds_add(nextReference, sc_to_ds(nextOffset));
       if (!(ds_length(next) <= 1e8)) { break; }
-      if (ds_length(nextOffset) > 0.01) { directMode = true; }
+      if (sc_log2_length(nextOffset) > -6.643856) { directMode = true; }
       offset = nextOffset;
       z = next;
     }
@@ -482,7 +539,12 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     let slot = (f32(rootIndex) + 0.5) / max(uniforms.render.y, 1.0);
     let base = palette_color(i32(uniforms.render.x), fract(slot));
     let shade = 0.38 + 0.72 * pow(1.0 - progress, 0.22);
-    let edge = smoothstep(0.0, 0.18, nearest / max(viewSpan, 1e-30));
+    var relativeDistance = 0.0;
+    if (nearest > 0.0) {
+      let viewLog2 = log2(max(uniforms.view.x, 1e-30)) + uniforms.view.z;
+      relativeDistance = exp2(clamp(log2(nearest) - viewLog2, -126.0, 0.0));
+    }
+    let edge = smoothstep(0.0, 0.18, relativeDistance);
     color = base * shade * (0.78 + 0.22 * edge);
   } else {
     let trace = 0.04 + 0.12 * (1.0 - progress);
@@ -494,7 +556,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
 }
 
 function boundsForView(view, width, height) {
-  const spanX = Math.max(view.span, 1e-18);
+  const spanX = spanValue(view);
   const spanY = spanX * Math.max(1, height / Math.max(width, 1));
   return [
     view.centerX - spanX * 0.5,
@@ -708,7 +770,8 @@ export class GpuRenderer {
     if (!this.ready || !pipeline || !bindGroup) return null;
     const { width, height } = this.resize();
     const bounds = boundsForView(state.view, width, height);
-    const spanX = Math.max(state.view.span, 1e-18);
+    const spanScale = encodeSpan(state.view, height / Math.max(width, 1));
+    const spanX = spanValue(state.view);
     const spanY = spanX * Math.max(1, height / Math.max(width, 1));
     const [centerXHigh, centerXLow] = splitFloat64(state.view.centerX);
     const [centerYHigh, centerYLow] = splitFloat64(state.view.centerY);
@@ -716,7 +779,7 @@ export class GpuRenderer {
     uniforms.set(bounds, 0);
     uniforms.set([width, height, state.iterations, state.tolerance], 4);
     uniforms.set([state.paletteIndex, roots.length, 0, 0], 8);
-    uniforms.set([spanX, spanY, 0, 0], 12);
+    uniforms.set([spanScale.mantissa, spanScale.verticalMantissa, spanScale.exponent, 0], 12);
     uniforms.set([centerXHigh, centerXLow, centerYHigh, centerYLow], 16);
     this.constantNames.forEach((name, index) => {
       const [high, low] = splitFloat64(state.constants[name]);
