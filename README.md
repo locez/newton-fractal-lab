@@ -27,6 +27,8 @@ npm run dev
 
 然后打开 <http://127.0.0.1:4173>。直接双击 `index.html` 也能看到界面，但 WebGPU 和模块加载应通过本地 HTTP 服务测试。
 
+如果界面显示 `CPU PREVIEW`，请在 Edge 打开 `edge://settings/system`，开启“可用时使用图形加速”，重启 Edge，再检查 `edge://gpu` 的 Graphics Feature Status。应用会在没有适配器时保留 CPU 预览，不会阻止使用。
+
 ### GitHub Pages
 
 仓库包含 `.github/workflows/deploy-pages.yml`。将默认分支推送到 GitHub 后，在仓库设置中把 Pages 的 Source 设为 `GitHub Actions`，后续每次推送到 `main` 都会执行 `npm run build` 并部署 `dist`。
@@ -67,6 +69,8 @@ npm run dev
 ```
 
 Open <http://127.0.0.1:4173>. Use the local HTTP server when testing module loading and WebGPU behavior.
+
+If the UI shows `CPU PREVIEW`, open `edge://settings/system`, enable “Use graphics acceleration when available”, restart Edge, and inspect Graphics Feature Status at `edge://gpu`. The app keeps a CPU preview available when no adapter can be returned.
 
 ### GitHub Pages
 

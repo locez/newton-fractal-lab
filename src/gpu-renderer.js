@@ -4,6 +4,12 @@ import { toWgsl } from "./parser.js";
 const MAX_CONSTANTS = 32;
 const UNIFORM_FLOATS = 140;
 
+function gpuError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
 const shaderPrelude = /* wgsl */ `
 struct Uniforms {
   bounds: vec4<f32>,
@@ -218,12 +224,26 @@ export class GpuRenderer {
   }
 
   async initialize() {
-    if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
-    this.adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
-    if (!this.adapter) throw new Error("No compatible WebGPU adapter was found.");
+    if (!window.isSecureContext) throw gpuError("secure-context", "WebGPU requires a secure context. Use localhost, 127.0.0.1, or HTTPS.");
+    if (!navigator.gpu) throw gpuError("unsupported", "WebGPU is not available in this browser.");
+
+    const adapterRequests = [
+      undefined,
+      { powerPreference: "low-power" },
+      { powerPreference: "high-performance" },
+    ];
+    for (const options of adapterRequests) {
+      try {
+        this.adapter = await navigator.gpu.requestAdapter(options);
+      } catch {
+        this.adapter = null;
+      }
+      if (this.adapter) break;
+    }
+    if (!this.adapter) throw gpuError("adapter", "Edge did not return a WebGPU adapter. Enable graphics acceleration and inspect edge://gpu.");
     this.device = await this.adapter.requestDevice();
     this.context = this.canvas.getContext("webgpu");
-    if (!this.context) throw new Error("The WebGPU canvas context could not be created.");
+    if (!this.context) throw gpuError("context", "The WebGPU canvas context could not be created.");
     this.format = navigator.gpu.getPreferredCanvasFormat();
     this.configure();
     this.uniformBuffer = this.device.createBuffer({

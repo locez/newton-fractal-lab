@@ -498,8 +498,13 @@ async function initRenderer() {
     await gpuRenderer.setExpression(state.expression, state.expression.constants);
     renderer = "gpu";
     updateEngineStatus("WEBGPU ACTIVE", "gpu");
-  } catch {
-    switchToCpu("WebGPU is unavailable or could not compile this expression. Use current Chrome/Edge or lower iterations for smoother CPU preview.");
+  } catch (error) {
+    const message = error?.code === "secure-context"
+      ? "WebGPU needs HTTPS or localhost. Open this app through the local server, not as a file."
+      : error?.code === "adapter"
+        ? "Edge returned no WebGPU adapter. Enable graphics acceleration in edge://settings/system, restart Edge, then inspect edge://gpu."
+        : "WebGPU is unavailable or could not compile this expression. Use a current Edge build or lower iterations for smoother CPU preview.";
+    switchToCpu(message);
   }
   scheduleRender();
 }

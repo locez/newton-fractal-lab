@@ -43,6 +43,7 @@ Use a current Microsoft Edge build over `http://127.0.0.1:4173` after `npm run d
 - Edge `149.0.4022.69` was driven through the DevTools Protocol against the local server.
 - The interaction matrix passed for Apply gating, invalid input, multi-variable warning, live constant updates, all overlays, palette switching, zoom, and panel dragging.
 - The headless container exposed `navigator.gpu` but had no compatible adapter, so the CPU fallback path was exercised. A physical WebGPU adapter is still required to measure the hardware renderer itself.
+- When Edge returns no adapter, verify `edge://settings/system` has graphics acceleration enabled and review `edge://gpu` before treating the result as an application error.
 
 ## WebGPU fallback test
 
