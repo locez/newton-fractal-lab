@@ -498,8 +498,7 @@ async function initRenderer() {
     await gpuRenderer.setExpression(state.expression, state.expression.constants);
     renderer = "gpu";
     updateEngineStatus("WEBGPU ACTIVE", "gpu");
-  } catch (error) {
-    console.warn(error);
+  } catch {
     switchToCpu("WebGPU is unavailable or could not compile this expression. Use current Chrome/Edge or lower iterations for smoother CPU preview.");
   }
   scheduleRender();
