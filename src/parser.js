@@ -319,8 +319,10 @@ function evaluateDual(node, z, constants) {
 function numberForWgsl(value) {
   if (!Number.isFinite(value)) return "0.0";
   if (Object.is(value, -0)) return "-0.0";
-  const text = Number(value).toPrecision(10).replace(/\.?0+$/, "");
-  return text.includes("e") ? text.replace("e", "e") : `${text.includes(".") ? text : `${text}.0`}`;
+  const text = Number(value).toString();
+  if (!text.includes("e")) return text.includes(".") ? text : `${text}.0`;
+  const [mantissa, exponent] = text.split("e");
+  return `${mantissa.includes(".") ? mantissa : `${mantissa}.0`}e${exponent}`;
 }
 
 function emitWgsl(node, constants, mode = "value") {

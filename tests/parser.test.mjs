@@ -35,10 +35,12 @@ test("rejects unknown symbols and malformed grouping", () => {
 });
 
 test("generates isolated WGSL value and derivative expressions", () => {
-  const expression = parseExpression("z^3 - a");
+  const expression = parseExpression("z^3 - a + 10 + 1e-7");
   const wgsl = toWgsl(expression.ast, expression.constants);
   assert.match(wgsl.value, /c_pow/);
   assert.match(wgsl.derivative, /c_mul/);
+  assert.match(wgsl.value, /10\.0/);
+  assert.match(wgsl.value, /1\.0e-7/);
   assert.doesNotMatch(wgsl.value, /z\^3/);
 });
 
