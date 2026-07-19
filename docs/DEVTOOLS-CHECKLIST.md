@@ -1,6 +1,6 @@
-# Chrome DevTools Verification Checklist
+# Edge DevTools Verification Checklist
 
-Use a current Chrome build over `http://127.0.0.1:4173` after `npm run dev`.
+Use a current Microsoft Edge build over `http://127.0.0.1:4173` after `npm run dev`. The same checklist also applies to Chrome DevTools.
 
 ## Functional matrix
 
@@ -38,6 +38,12 @@ Use a current Chrome build over `http://127.0.0.1:4173` after `npm run dev`.
 - [ ] Reload from the local server and verify `index.html`, `styles.css`, and `src/main.js` load with status 200.
 - [ ] Run `npm run build` and verify the generated `dist/.nojekyll` file and static `dist/src` modules exist.
 
+## Recorded Edge run
+
+- Edge `149.0.4022.69` was driven through the DevTools Protocol against the local server.
+- The interaction matrix passed for Apply gating, invalid input, multi-variable warning, live constant updates, all overlays, palette switching, zoom, and panel dragging.
+- The headless container exposed `navigator.gpu` but had no compatible adapter, so the CPU fallback path was exercised. A physical WebGPU adapter is still required to measure the hardware renderer itself.
+
 ## WebGPU fallback test
 
-In Chrome, open `chrome://flags`, temporarily disable WebGPU if the build exposes that flag, relaunch, and reload the app. The CPU preview should be visible and the warning should be dismissible. Restore the flag after testing.
+In Edge, open `edge://flags`, temporarily disable WebGPU if the build exposes that flag, relaunch, and reload the app. The CPU preview should be visible and the warning should be dismissible. Restore the flag after testing.

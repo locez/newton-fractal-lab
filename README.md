@@ -31,9 +31,9 @@ npm run dev
 
 仓库包含 `.github/workflows/deploy-pages.yml`。将默认分支推送到 GitHub 后，在仓库设置中把 Pages 的 Source 设为 `GitHub Actions`，后续每次推送到 `main` 都会执行 `npm run build` 并部署 `dist`。
 
-### Chrome DevTools 验证
+### Edge / Chrome DevTools 验证
 
-完整检查清单位于 [`docs/DEVTOOLS-CHECKLIST.md`](./docs/DEVTOOLS-CHECKLIST.md)。建议使用最新版 Chrome，在 DevTools 的 Console、Performance、Memory 和 Application 面板分别验证表达式错误、渲染帧耗时、反复缩放后的内存稳定性和静态资源加载。
+完整检查清单位于 [`docs/DEVTOOLS-CHECKLIST.md`](./docs/DEVTOOLS-CHECKLIST.md)。建议使用最新版 Edge 或 Chrome，在 DevTools 的 Console、Performance、Memory 和 Application 面板分别验证表达式错误、渲染帧耗时、反复缩放后的内存稳定性和静态资源加载。
 
 ### Prompt 与 luna 模型说明
 
@@ -72,9 +72,9 @@ Open <http://127.0.0.1:4173>. Use the local HTTP server when testing module load
 
 `.github/workflows/deploy-pages.yml` builds the static `dist` directory and deploys it with the official Pages actions. Set the repository Pages source to `GitHub Actions`, then push to `main`.
 
-### Chrome DevTools validation
+### Edge / Chrome DevTools validation
 
-The full manual checklist is in [`docs/DEVTOOLS-CHECKLIST.md`](./docs/DEVTOOLS-CHECKLIST.md). Use a current Chrome build and inspect Console, Performance, Memory, and Application while testing invalid expressions, frame timing, repeated zooming, and static asset loading.
+The full manual checklist is in [`docs/DEVTOOLS-CHECKLIST.md`](./docs/DEVTOOLS-CHECKLIST.md). Use a current Edge or Chrome build and inspect Console, Performance, Memory, and Application while testing invalid expressions, frame timing, repeated zooming, and static asset loading.
 
 ### Prompt and luna model note
 
