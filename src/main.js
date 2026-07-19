@@ -3,9 +3,10 @@ import { GpuRenderer, MAX_CONSTANTS } from "./gpu-renderer.js";
 import { renderCpu, clearCpuCanvas } from "./cpu-renderer.js";
 import { findRoots } from "./root-finder.js";
 import { PALETTES } from "./palettes.js";
-import { drawOverlay, formatComplexPoint, screenToWorld } from "./overlay.js";
+import { drawOverlay, formatComplexPoint } from "./overlay.js";
 import { needsPrecisionDetail } from "./view-precision.js";
 import { setSpanLog2, spanLog2, spanValue } from "./view-scale.js";
+import { addCenterDelta, centerApprox, setCenter } from "./view-center.js";
 
 const fractalCanvas = document.querySelector("#fractal-canvas");
 const cpuCanvas = document.querySelector("#cpu-canvas");
@@ -44,7 +45,7 @@ const state = {
   expression: initialExpression,
   constants: { a: 1 },
   ranges: { a: { min: -2, max: 2, step: 0.01 } },
-  view: { centerX: 0, centerY: 0, span: 6, spanLog2: Math.log2(6) },
+  view: { centerX: 0, centerY: 0, centerXLow: 0, centerYLow: 0, span: 6, spanLog2: Math.log2(6) },
   initialSpanLog2: Math.log2(6),
   iterations: 160,
   tolerance: 0.0001,
@@ -113,7 +114,7 @@ function updateViewReadouts() {
   } else {
     zoomReadout.textContent = `10^${percentLog10.toFixed(1)}%`;
   }
-  centerReadout.textContent = formatComplexPoint({ re: state.view.centerX, im: state.view.centerY });
+  centerReadout.textContent = formatComplexPoint(centerApprox(state.view));
 }
 
 function updatePaletteSwatches() {
@@ -381,22 +382,24 @@ async function applyExpression() {
 
 function applyZoom(factor, anchorX = overlayCanvas.clientWidth * 0.5, anchorY = overlayCanvas.clientHeight * 0.5) {
   const { width, height } = viewSize();
-  const before = screenToWorld(state.view, anchorX, anchorY, width, height);
-  setSpanLog2(state.view, spanLog2(state.view) + Math.log2(factor));
-  const nextSpan = spanValue(state.view);
+  const aspect = Math.max(1, height / Math.max(width, 1));
   const nx = anchorX / width - 0.5;
   const ny = 0.5 - anchorY / height;
-  const nextSpanY = nextSpan * height / width;
-  state.view.centerX = before.re - nx * nextSpan;
-  state.view.centerY = before.im - ny * nextSpanY;
+  const previousSpan = spanValue(state.view);
+  const previousOffsetX = nx * previousSpan;
+  const previousOffsetY = ny * previousSpan * aspect;
+  setSpanLog2(state.view, spanLog2(state.view) + Math.log2(factor));
+  const nextSpan = spanValue(state.view);
+  const nextOffsetX = nx * nextSpan;
+  const nextOffsetY = ny * nextSpan * aspect;
+  addCenterDelta(state.view, previousOffsetX - nextOffsetX, previousOffsetY - nextOffsetY);
   updateViewReadouts();
   drawOverlay(overlayCanvas, state, state.roots);
   scheduleRender();
 }
 
 function resetView() {
-  state.view.centerX = 0;
-  state.view.centerY = 0;
+  setCenter(state.view, 0, 0);
   setSpanLog2(state.view, state.initialSpanLog2);
   updateViewReadouts();
   updateRoots();
@@ -443,8 +446,8 @@ function bindCanvasInteractions() {
     interaction.moved = true;
     const { width, height } = viewSize();
     const span = spanValue(state.view);
-    state.view.centerX -= (dx / width) * span;
-    state.view.centerY += (dy / height) * span * height / width;
+    const aspect = Math.max(1, height / Math.max(width, 1));
+    addCenterDelta(state.view, -(dx / width) * span, (dy / height) * span * aspect);
     interaction.x = event.clientX;
     interaction.y = event.clientY;
     updateViewReadouts();

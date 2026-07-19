@@ -6,6 +6,7 @@ import { evaluateExpression, ExpressionError, parseExpression, toDsWgsl, toWgsl 
 import { findRoots } from "../src/root-finder.js";
 import { needsPrecisionDetail } from "../src/view-precision.js";
 import { encodeSpan, setSpanLog2, spanLog2, spanValue } from "../src/view-scale.js";
+import { addCenterDelta, centerDifference, encodeScaledDoubleDouble } from "../src/view-center.js";
 
 test("parses implicit multiplication, pi, and supported functions", () => {
   const expression = parseExpression("2sin(pi / 2) + 3z");
@@ -90,4 +91,27 @@ test("keeps GPU scale exponents after JavaScript numbers underflow", () => {
   assert.equal(spanLog2(view), -2000);
   assert.equal(spanValue(view), Number.MIN_VALUE);
   assert.equal(encodeSpan(view).exponent, -2000);
+});
+
+test("preserves drag-sized center deltas below a Number ulp", () => {
+  const view = { centerX: 1, centerY: -2, centerXLow: 0, centerYLow: 0 };
+  const deltaX = 2 ** -60;
+  const deltaY = -(2 ** -61);
+  addCenterDelta(view, deltaX, deltaY);
+
+  assert.equal(view.centerX, 1);
+  assert.equal(view.centerY, -2);
+  const delta = centerDifference(view, { x: 1, y: -2 });
+  assert.ok(Math.abs(delta.realHigh + delta.realLow - deltaX) < deltaX * 1e-12);
+  assert.ok(Math.abs(delta.imaginaryHigh + delta.imaginaryLow - deltaY) < Math.abs(deltaY) * 1e-12);
+
+  const encoded = encodeScaledDoubleDouble(
+    delta.realHigh,
+    delta.realLow,
+    delta.imaginaryHigh,
+    delta.imaginaryLow,
+  );
+  assert.equal(encoded.exponent, -60);
+  assert.ok(Math.abs(encoded.real - 1) < 1e-6);
+  assert.ok(Math.abs(encoded.imaginary + 0.5) < 1e-6);
 });

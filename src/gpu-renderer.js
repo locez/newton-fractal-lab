@@ -1,11 +1,12 @@
 import { cAbs, cAdd, cDiv, cSub, complex, isFiniteComplex } from "./complex.js";
 import { evaluateExpression, toDsWgsl, toWgsl } from "./parser.js";
 import { MAX_ROOTS } from "./root-finder.js";
-import { encodeSpan, spanValue } from "./view-scale.js";
+import { centerDifference, encodeScaledDoubleDouble } from "./view-center.js";
+import { encodeSpan, spanLog2, spanValue } from "./view-scale.js";
 
 const MAX_CONSTANTS = 32;
 const MAX_ITERATIONS = 512;
-const BASE_UNIFORM_FLOATS = 20 + MAX_CONSTANTS + MAX_CONSTANTS + MAX_ROOTS * 8;
+const BASE_UNIFORM_FLOATS = 24 + MAX_CONSTANTS + MAX_CONSTANTS + MAX_ROOTS * 8;
 const REFERENCE_OFFSET = BASE_UNIFORM_FLOATS;
 const JACOBIAN_OFFSET = REFERENCE_OFFSET + (MAX_ITERATIONS + 1) * 4;
 const CURVATURE_OFFSET = JACOBIAN_OFFSET + MAX_ITERATIONS * 4;
@@ -24,6 +25,7 @@ struct Uniforms {
   render: vec4<f32>,
   view: vec4<f32>,
   origin: vec4<f32>,
+  centerOffset: vec4<f32>,
   constants: array<vec4<f32>, 8>,
   constantLow: array<vec4<f32>, 8>,
   roots: array<vec4<f32>, ${MAX_ROOTS * 2}>,
@@ -472,7 +474,10 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     vec2<f32>(uniforms.origin.x, uniforms.origin.z),
     vec2<f32>(uniforms.origin.y, uniforms.origin.w)
   );
-  var offset = sc_from_vec(initialOffset, uniforms.view.z);
+  var offset = sc_add(
+    sc_from_vec(uniforms.centerOffset.xy, uniforms.centerOffset.z),
+    sc_from_vec(initialOffset, uniforms.view.z)
+  );
   var z = ds_add(referenceStart, sc_to_ds(offset));
   var directMode = false;
   var converged = false;
@@ -589,11 +594,11 @@ function writeSplitComplex(target, offset, value) {
   target[offset + 3] = imaginaryLow;
 }
 
-function buildReferenceOrbit(state) {
+function buildReferenceOrbit(state, referenceCenter) {
   const reference = new Float32Array((MAX_ITERATIONS + 1) * 4);
   const jacobian = new Float32Array(MAX_ITERATIONS * 4);
   const curvature = new Float32Array(MAX_ITERATIONS * 4);
-  let z = complex(state.view.centerX, state.view.centerY);
+  let z = complex(referenceCenter.x, referenceCenter.y);
   let stopped = false;
 
   for (let iteration = 0; iteration <= MAX_ITERATIONS; iteration += 1) {
@@ -624,19 +629,33 @@ function buildReferenceOrbit(state) {
   return { reference, jacobian, curvature };
 }
 
-function referenceKey(state) {
+function referenceKey(state, referenceCenter) {
   const constants = Object.keys(state.constants)
     .sort()
     .map((name) => `${name}:${state.constants[name]}`)
     .join(",");
   return [
     state.expression.source,
-    state.view.centerX,
-    state.view.centerY,
+    referenceCenter.x,
+    referenceCenter.y,
     state.iterations,
     state.tolerance,
     constants,
   ].join("|");
+}
+
+function differenceLog2(delta) {
+  const magnitude = Math.max(
+    Math.abs(delta.realHigh),
+    Math.abs(delta.realLow),
+    Math.abs(delta.imaginaryHigh),
+    Math.abs(delta.imaginaryLow),
+  );
+  return magnitude > 0 && Number.isFinite(magnitude) ? Math.log2(magnitude) : -Infinity;
+}
+
+function shouldRebase(delta, view) {
+  return differenceLog2(delta) > spanLog2(view) + 3;
 }
 
 export class GpuRenderer {
@@ -655,6 +674,7 @@ export class GpuRenderer {
     this.expression = null;
     this.constantNames = [];
     this.referenceCache = null;
+    this.referenceCenter = null;
     this.lastGpuTime = 0;
     this.ready = false;
   }
@@ -727,6 +747,8 @@ export class GpuRenderer {
     this.detailPipeline = null;
     this.detailBindGroup = null;
     this.detailSupported = false;
+    this.referenceCache = null;
+    this.referenceCenter = null;
     try {
       const detailModule = this.device.createShaderModule({ code: buildDeepShader(expression, constantNames) });
       if (typeof detailModule.getCompilationInfo === "function") {
@@ -773,21 +795,42 @@ export class GpuRenderer {
     const spanScale = encodeSpan(state.view, height / Math.max(width, 1));
     const spanX = spanValue(state.view);
     const spanY = spanX * Math.max(1, height / Math.max(width, 1));
-    const [centerXHigh, centerXLow] = splitFloat64(state.view.centerX);
-    const [centerYHigh, centerYLow] = splitFloat64(state.view.centerY);
+    let originCenter = { x: state.view.centerX, y: state.view.centerY };
+    let centerOffset = { real: 0, imaginary: 0, exponent: 0 };
+    if (detail) {
+      if (!this.referenceCenter) {
+        this.referenceCenter = { x: state.view.centerX, y: state.view.centerY };
+      }
+      let delta = centerDifference(state.view, this.referenceCenter);
+      if (shouldRebase(delta, state.view)) {
+        this.referenceCenter = { x: state.view.centerX, y: state.view.centerY };
+        this.referenceCache = null;
+        delta = centerDifference(state.view, this.referenceCenter);
+      }
+      originCenter = this.referenceCenter;
+      centerOffset = encodeScaledDoubleDouble(
+        delta.realHigh,
+        delta.realLow,
+        delta.imaginaryHigh,
+        delta.imaginaryLow,
+      );
+    }
+    const [centerXHigh, centerXLow] = splitFloat64(originCenter.x);
+    const [centerYHigh, centerYLow] = splitFloat64(originCenter.y);
     const uniforms = new Float32Array(UNIFORM_FLOATS);
     uniforms.set(bounds, 0);
     uniforms.set([width, height, state.iterations, state.tolerance], 4);
     uniforms.set([state.paletteIndex, roots.length, 0, 0], 8);
     uniforms.set([spanScale.mantissa, spanScale.verticalMantissa, spanScale.exponent, 0], 12);
     uniforms.set([centerXHigh, centerXLow, centerYHigh, centerYLow], 16);
+    uniforms.set([centerOffset.real, centerOffset.imaginary, centerOffset.exponent, 0], 20);
     this.constantNames.forEach((name, index) => {
       const [high, low] = splitFloat64(state.constants[name]);
       const componentOffset = index;
-      uniforms[20 + componentOffset] = high;
-      uniforms[52 + componentOffset] = low;
+      uniforms[24 + componentOffset] = high;
+      uniforms[56 + componentOffset] = low;
     });
-    const rootsOffset = 84;
+    const rootsOffset = 88;
     roots.forEach((root, index) => {
       const [realHigh, realLow] = splitFloat64(root.re);
       const [imaginaryHigh, imaginaryLow] = splitFloat64(root.im);
@@ -798,9 +841,9 @@ export class GpuRenderer {
       uniforms[offset + 5] = imaginaryLow;
     });
     if (detail) {
-      const key = referenceKey(state);
+      const key = referenceKey(state, this.referenceCenter);
       if (!this.referenceCache || this.referenceCache.key !== key) {
-        this.referenceCache = { key, ...buildReferenceOrbit(state) };
+        this.referenceCache = { key, ...buildReferenceOrbit(state, this.referenceCenter) };
       }
       uniforms.set(this.referenceCache.reference, REFERENCE_OFFSET);
       uniforms.set(this.referenceCache.jacobian, JACOBIAN_OFFSET);
