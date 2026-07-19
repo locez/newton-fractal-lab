@@ -1,4 +1,4 @@
-name: Deploy Newton Lab to GitHub Pages
+name: Deploy Newton Fractal to GitHub Pages
 
 on:
   push:
@@ -19,11 +19,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
+          package-manager-cache: false
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
       - name: Build static site
         run: npm run build
       - name: Upload Pages artifact
@@ -40,4 +43,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

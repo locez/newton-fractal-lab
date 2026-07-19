@@ -31,7 +31,7 @@ npm run dev
 
 ### GitHub Pages
 
-仓库包含 `.github/workflows/deploy-pages.yml`。将默认分支推送到 GitHub 后，在仓库设置中把 Pages 的 Source 设为 `GitHub Actions`，后续每次推送到 `main` 都会执行 `npm run build` 并部署 `dist`。
+仓库包含 `.github/workflows/deploy-pages.yml`。首次部署前，需要由仓库管理员打开 Settings -> Pages，在 Build and deployment -> Source 中选择 `GitHub Actions`；这是 GitHub Pages 的仓库级前置设置，workflow 不能用默认 `GITHUB_TOKEN` 代替管理员启用。完成后将默认分支推送到 GitHub，每次推送到 `main` 都会执行 `npm run build` 并部署 `dist`。
 
 ### Edge / Chrome DevTools 验证
 
@@ -74,7 +74,7 @@ If the UI shows `CPU PREVIEW`, open `edge://settings/system`, enable “Use grap
 
 ### GitHub Pages
 
-`.github/workflows/deploy-pages.yml` builds the static `dist` directory and deploys it with the official Pages actions. Set the repository Pages source to `GitHub Actions`, then push to `main`.
+`.github/workflows/deploy-pages.yml` builds the static `dist` directory and deploys it with the official Pages actions. Before the first run, a repository administrator must open Settings -> Pages and set Build and deployment -> Source to `GitHub Actions`; the default `GITHUB_TOKEN` cannot replace that repository-level enablement. Then push to `main`.
 
 ### Edge / Chrome DevTools validation
 
